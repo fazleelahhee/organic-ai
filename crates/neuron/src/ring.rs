@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NumberRing {
     activity: Vec<f32>,
     size: usize,

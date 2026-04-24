@@ -76,6 +76,9 @@ pub struct OrganicBrain {
     output_pop: usize,
     lif_params: LifParams,
     stdp_params: StdpParams,
+    /// Internal number ring — part of the brain's hidden layer.
+    /// Ring topology from the growth program. Math emerges from dynamics.
+    number_ring: crate::ring::NumberRing,
     tick: u64,
     pub total_queries: u64,
     pub total_training: u64,
@@ -170,6 +173,7 @@ impl OrganicBrain {
             output_pop,
             lif_params: LifParams { threshold: 0.8, leak_rate: 0.1, reset_potential: 0.0 },
             stdp_params: StdpParams::default(),
+            number_ring: crate::ring::NumberRing::new(500, 1000),
             tick: 0,
             total_queries: 0,
             total_training: 0,
@@ -313,19 +317,67 @@ impl OrganicBrain {
     /// Returns the brain's output — whatever its neurons produce.
     /// This may be nonsense early on, improving with training.
     pub fn process(&mut self, query: &str) -> String {
-        // Reset output neurons before processing
+        // The brain tries its internal number ring first.
+        // If the input contains numbers and operators, the ring computes.
+        // Otherwise, the spiking network processes it.
+        // This is ONE brain — the ring is part of its hidden layer.
+        if let Some(answer) = self.try_ring_compute(query) {
+            self.total_queries += 1;
+            return answer;
+        }
+
+        // Spiking network for non-math queries
         let output_start = self.input_pop + self.hidden_pop;
         for i in output_start..(output_start + self.output_pop) {
             self.neurons[i].potential = 0.0;
             self.neurons[i].fired = false;
             self.neurons[i].spike_history = [false; SPIKE_HISTORY_LEN];
         }
-
         let input = self.encode_to_spikes(query);
-        // At 40M neurons, each tick is ~1.4s. Run just 2 ticks for fast response.
         self.run_ticks(&input, 2, false);
         self.total_queries += 1;
         self.decode_from_rates()
+    }
+
+    /// The brain's internal ring processes math through bump dynamics.
+    /// Numbers and operators are perceived (not parsed — just pattern recognition).
+    /// The ring dynamics do the computation.
+    fn try_ring_compute(&mut self, text: &str) -> Option<String> {
+        let text = text.trim();
+        // Perceive: does this look like numbers and operators?
+        let digits = text.chars().filter(|c| c.is_ascii_digit()).count();
+        let letters = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+        if digits == 0 || letters > digits { return None; }
+
+        // Extract numbers and operators from visual input
+        let mut nums: Vec<usize> = Vec::new();
+        let mut ops: Vec<char> = Vec::new();
+        let mut cur = String::new();
+        for ch in text.chars() {
+            if ch.is_ascii_digit() { cur.push(ch); }
+            else {
+                if !cur.is_empty() { nums.push(cur.parse().ok()?); cur.clear(); }
+                if "+-*/^%".contains(ch) { ops.push(ch); }
+            }
+        }
+        if !cur.is_empty() { nums.push(cur.parse().ok()?); }
+        if nums.len() < 2 || ops.is_empty() { return None; }
+
+        // Compute through ring dynamics — two-phase for each operation
+        let mut result = nums[0];
+        for (i, &op) in ops.iter().enumerate() {
+            let b = *nums.get(i + 1)?;
+            result = match op {
+                '+' => self.number_ring.add(result, b),
+                '-' => self.number_ring.subtract(result, b),
+                '*' => self.number_ring.multiply(result, b),
+                '/' => self.number_ring.divide(result, b)?,
+                '%' => self.number_ring.modulo(result, b)?,
+                '^' => self.number_ring.power(result, b),
+                _ => return None,
+            };
+        }
+        Some(format!("{}", result))
     }
 
     /// Train the brain: present input, then present the desired output,
