@@ -73,10 +73,13 @@ async fn main() {
 
                     let memory_key = req.question.to_lowercase().trim().to_string();
 
-                    // Step 1: Try arithmetic (instant)
-                    let math_answer = world.language.try_understand(&req.question)
-                        .and_then(|expr| world.arithmetic.try_compute(&expr))
-                        .or_else(|| world.arithmetic.try_compute(&req.question));
+                    // Step 1: Neural math — spike population dynamics (genuine neural computation)
+                    let math_answer = world.neural_math.try_compute(&req.question)
+                        .or_else(|| {
+                            // Try language translation for word-based math
+                            world.language.try_understand(&req.question)
+                                .and_then(|expr| world.neural_math.try_compute(&expr))
+                        });
 
                     let (response, source) = if let Some(answer) = math_answer {
                         (answer, "arithmetic")

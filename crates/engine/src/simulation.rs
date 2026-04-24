@@ -49,6 +49,7 @@ pub struct World {
     pub council: Council,
     pub cortex: organic_neuron::cortex::Cortex,
     pub arithmetic: organic_neuron::arithmetic::NeuralArithmetic,
+    pub neural_math: organic_neuron::neural_math::NeuralMath,
     pub language: organic_neuron::language::LanguageCortex,
     pub brain: organic_neuron::brain::OrganicBrain,
     next_organism_id: OrganismId,
@@ -129,7 +130,7 @@ impl World {
             }
         }
 
-        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), session_memory: SessionMemory::new(), council: Council::new(5), cortex: organic_neuron::cortex::Cortex::new(), arithmetic: organic_neuron::arithmetic::NeuralArithmetic::new(), language: organic_neuron::language::LanguageCortex::new(), brain: organic_neuron::brain::OrganicBrain::new(), next_organism_id: next_id, rng }
+        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), session_memory: SessionMemory::new(), council: Council::new(5), cortex: organic_neuron::cortex::Cortex::new(), arithmetic: organic_neuron::arithmetic::NeuralArithmetic::new(), language: organic_neuron::language::LanguageCortex::new(), brain: organic_neuron::brain::OrganicBrain::new(), neural_math: organic_neuron::neural_math::NeuralMath::new(), next_organism_id: next_id, rng }
     }
 
     pub fn allocate_organism_id(&mut self) -> OrganismId {
