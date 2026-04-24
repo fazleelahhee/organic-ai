@@ -16,7 +16,7 @@ pub struct ToolHandler {
 impl ToolHandler {
     pub fn new() -> Self {
         Self {
-            memory: ToolMemory::new(100),
+            memory: ToolMemory::new(10000),
             safety: SafetyLayer::new(50), // 50 external actions per reset cycle
         }
     }

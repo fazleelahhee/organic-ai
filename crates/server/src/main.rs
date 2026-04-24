@@ -56,21 +56,47 @@ async fn main() {
                 for req in requests {
                     println!("Processing question: {}", req.question);
 
-                    // Use claude CLI to answer
-                    let result = organic_tools::external::llm_query(&req.question);
+                    // Step 1: Check organism's memory — has it seen this before?
+                    let memory_key = req.question.to_lowercase().trim().to_string();
+                    let remembered = world.tool_handler.memory.retrieve(
+                        string_to_address(&memory_key)
+                    );
+
+                    let (response, source) = if !remembered.is_empty() {
+                        // Organism remembers! Convert stored signals back to text
+                        let text = signals_to_text(&remembered);
+                        if !text.is_empty() {
+                            (text, "memory")
+                        } else {
+                            // Memory corrupted, fall through to Claude
+                            let result = organic_tools::external::llm_query(&req.question);
+                            let answer = if result.success { result.output.clone() } else { "I don't know yet.".to_string() };
+                            // Learn: store in memory for next time
+                            let signals = text_to_store_signals(&answer);
+                            world.tool_handler.memory.store(string_to_address(&memory_key), signals);
+                            (answer, "claude (re-learned)")
+                        }
+                    } else {
+                        // Not in memory — ask Claude (use it as a tool)
+                        let result = organic_tools::external::llm_query(&req.question);
+                        let answer = if result.success { result.output.clone() } else { "I don't know yet.".to_string() };
+
+                        // LEARN: store the answer in organism's memory
+                        let signals = text_to_store_signals(&answer);
+                        world.tool_handler.memory.store(string_to_address(&memory_key), signals);
+                        println!("  → Learned and stored in memory");
+
+                        (answer, "claude (first time)")
+                    };
+
+                    println!("  → Answered from: {}", source);
 
                     // Record the interaction
                     world.session_memory.record_interaction(
                         world.tick_count,
                         &req.question,
-                        if result.success { 1.0 } else { 0.0 },
+                        if source == "memory" { 1.0 } else { 0.5 },
                     );
-
-                    let response = if result.success {
-                        result.output
-                    } else {
-                        format!("My neurons couldn't process that yet: {}", result.output)
-                    };
 
                     let _ = req.response_tx.send(response);
                 }
@@ -106,4 +132,29 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Convert a string to a memory address (hash to f32 in 0-1 range).
+fn string_to_address(s: &str) -> f32 {
+    let hash = s.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    (hash % 10000) as f32 / 10000.0
+}
+
+/// Convert text to signal values for storage in organism memory.
+fn text_to_store_signals(text: &str) -> Vec<f32> {
+    text.bytes()
+        .take(200) // limit stored length
+        .map(|b| b as f32 / 255.0)
+        .collect()
+}
+
+/// Convert stored signal values back to text.
+fn signals_to_text(signals: &[f32]) -> String {
+    signals.iter()
+        .map(|&s| (s * 255.0) as u8)
+        .filter(|&b| b >= 32 && b < 127) // printable ASCII only
+        .map(|b| b as char)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
