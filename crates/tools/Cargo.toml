@@ -1,0 +1,10 @@
+[package]
+name = "organic-tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+organic-core = { path = "../core" }
+organic-substrate = { path = "../substrate" }
+serde = { version = "1", features = ["derive"] }
+rand = "0.8"

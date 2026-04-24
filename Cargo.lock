@@ -454,6 +454,7 @@ dependencies = [
  "organic-growth",
  "organic-neuron",
  "organic-substrate",
+ "organic-tools",
  "rand",
  "serde",
  "serde_json",
@@ -506,6 +507,16 @@ name = "organic-substrate"
 version = "0.1.0"
 dependencies = [
  "organic-core",
+ "rand",
+ "serde",
+]
+
+[[package]]
+name = "organic-tools"
+version = "0.1.0"
+dependencies = [
+ "organic-core",
+ "organic-substrate",
  "rand",
  "serde",
 ]

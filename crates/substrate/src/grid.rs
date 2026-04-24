@@ -43,6 +43,10 @@ impl Grid {
         if let Some(i) = self.index(pos) { self.tiles[i] = tile; }
     }
 
+    pub fn set_tile_pub(&mut self, pos: Position, tile: TileType) {
+        if let Some(i) = self.index(pos) { self.tiles[i] = tile; }
+    }
+
     fn resource_density_at(&self, pos: Position) -> f32 {
         let neighbors = pos.neighbors();
         let mut total = 0.0;

@@ -7,6 +7,8 @@ use organic_substrate::grid::Grid;
 use organic_substrate::sal::{ActionResult, SubstrateInterface};
 use organic_evolution::archive::QDArchive;
 use organic_evolution::behavior::BehaviorDescriptor;
+use organic_tools::handler::ToolHandler;
+use organic_substrate::tile::{TileType, ToolType};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -35,8 +37,16 @@ pub struct World {
     pub organisms: Vec<Organism>,
     pub tick_count: u64,
     pub qd_archive: QDArchive,
+    pub tool_handler: ToolHandler,
     next_organism_id: OrganismId,
     rng: rand::rngs::ThreadRng,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolTileSnapshot {
+    pub x: i32,
+    pub y: i32,
+    pub tool_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +60,7 @@ pub struct WorldSnapshot {
     pub archive_coverage: usize,
     pub archive_capacity: usize,
     pub max_generation: u32,
+    pub tool_positions: Vec<ToolTileSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,7 +96,15 @@ impl World {
             next_id += 1;
         }
 
-        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), next_organism_id: next_id, rng }
+        // Scatter tool tiles
+        for tool_type in [ToolType::Memory, ToolType::Pattern, ToolType::Logic, ToolType::Language] {
+            for _ in 0..5 {
+                let pos = Position::new(rng.gen_range(0..config.width), rng.gen_range(0..config.height));
+                grid.set_tile_pub(pos, TileType::Tool(tool_type));
+            }
+        }
+
+        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), next_organism_id: next_id, rng }
     }
 
     pub fn allocate_organism_id(&mut self) -> OrganismId {
@@ -259,6 +278,28 @@ impl World {
             }
         }
 
+        // Tool tile interactions
+        let org_count = self.organisms.len();
+        for i in 0..org_count {
+            if self.organisms[i].phase != LifecyclePhase::Living { continue; }
+            let inputs: Vec<(ToolType, Vec<f32>)> = self.organisms[i].cells.iter()
+                .filter(|c| c.cell_type == CellType::Sensor)
+                .filter_map(|c| {
+                    if let TileType::Tool(tt) = self.grid.get_tile(c.position) {
+                        let inp: Vec<f32> = self.organisms[i].cells.iter()
+                            .filter(|c2| c2.spike_active)
+                            .map(|c2| c2.information_gain)
+                            .take(4).collect();
+                        if !inp.is_empty() { Some((tt, inp)) } else { None }
+                    } else { None }
+                }).collect();
+            let mut tool_bonus = 0.0f32;
+            for (tt, inp) in inputs {
+                tool_bonus += self.tool_handler.interact(tt, &inp) * 0.5;
+            }
+            self.organisms[i].energy += tool_bonus;
+        }
+
         self.organisms.retain(|o| o.is_alive());
         self.tick_count += 1;
     }
@@ -285,6 +326,21 @@ impl World {
             archive_coverage: self.qd_archive.coverage(),
             archive_capacity: self.qd_archive.capacity(),
             max_generation: self.organisms.iter().map(|o| o.generation).max().unwrap_or(0),
+            tool_positions: {
+                let (w, h) = self.grid.dimensions();
+                let mut tools = Vec::new();
+                for y in 0..h {
+                    for x in 0..w {
+                        if let TileType::Tool(tt) = self.grid.get_tile(Position::new(x, y)) {
+                            tools.push(ToolTileSnapshot {
+                                x, y,
+                                tool_type: format!("{:?}", tt),
+                            });
+                        }
+                    }
+                }
+                tools
+            },
         }
     }
 }

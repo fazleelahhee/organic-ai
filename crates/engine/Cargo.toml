@@ -9,6 +9,7 @@ organic-substrate = { path = "../substrate" }
 organic-growth = { path = "../growth" }
 organic-neuron = { path = "../neuron" }
 organic-evolution = { path = "../evolution" }
+organic-tools = { path = "../tools" }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 
