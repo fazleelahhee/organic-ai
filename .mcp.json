@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "context-engine": {
+      "command": "/Users/fazleelahee/.local/share/uv/tools/claude-context-engine/bin/cce",
+      "args": [
+        "serve",
+        "--project-dir",
+        "/Users/fazleelahee/Documents/organic_ai"
+      ]
+    }
+  }
+}
