@@ -57,10 +57,13 @@ async fn main() {
                     println!("Processing question: {}", req.question);
                     let memory_key = req.question.to_lowercase().trim().to_string();
 
-                    // LAYER 1: Try cortex (genuine neural learning)
-                    let cortex_answer = world.cortex.try_answer(&req.question);
+                    // LAYER 0: Neural arithmetic — organism COMPUTES, doesn't memorize
+                    let arithmetic_answer = world.arithmetic.try_compute(&req.question);
 
-                    let (response, source) = if let Some(answer) = cortex_answer {
+                    let (response, source) = if let Some(answer) = arithmetic_answer {
+                        (answer, "neural arithmetic (computed)")
+
+                    } else if let Some(answer) = world.cortex.try_answer(&req.question) {
                         (answer, "cortex (learned)")
 
                     } else {

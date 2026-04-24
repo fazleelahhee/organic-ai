@@ -48,6 +48,7 @@ pub struct World {
     pub session_memory: SessionMemory,
     pub council: Council,
     pub cortex: organic_neuron::cortex::Cortex,
+    pub arithmetic: organic_neuron::arithmetic::NeuralArithmetic,
     next_organism_id: OrganismId,
     #[serde(skip, default = "default_rng")]
     rng: rand::rngs::ThreadRng,
@@ -126,7 +127,7 @@ impl World {
             }
         }
 
-        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), session_memory: SessionMemory::new(), council: Council::new(5), cortex: organic_neuron::cortex::Cortex::new(), next_organism_id: next_id, rng }
+        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), session_memory: SessionMemory::new(), council: Council::new(5), cortex: organic_neuron::cortex::Cortex::new(), arithmetic: organic_neuron::arithmetic::NeuralArithmetic::new(), next_organism_id: next_id, rng }
     }
 
     pub fn allocate_organism_id(&mut self) -> OrganismId {
