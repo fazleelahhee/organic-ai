@@ -1,0 +1,13 @@
+{
+  "name": "organic-ai-visualizer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx esbuild web/src/main.ts --bundle --outfile=web/dist/bundle.js --servedir=web --watch",
+    "build": "npx esbuild web/src/main.ts --bundle --outfile=web/dist/bundle.js --minify"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0"
+  }
+}

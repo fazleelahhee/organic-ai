@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrganicAI</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      color: #e0e0e0;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 10px; color: #4CAF50; }
+    #stats { display: flex; gap: 24px; margin-bottom: 16px; font-size: 0.9rem; }
+    .stat-label { color: #888; }
+    .stat-value { color: #4CAF50; font-weight: bold; }
+    #world { border: 1px solid #333; image-rendering: pixelated; }
+    #legend { display: flex; gap: 16px; margin-top: 12px; font-size: 0.8rem; }
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-color { width: 12px; height: 12px; display: inline-block; }
+  </style>
+</head>
+<body>
+  <h1>OrganicAI</h1>
+  <div id="stats">
+    <span><span class="stat-label">Tick:</span> <span class="stat-value" id="tick">0</span></span>
+    <span><span class="stat-label">Organisms:</span> <span class="stat-value" id="org-count">0</span></span>
+    <span><span class="stat-label">Resources:</span> <span class="stat-value" id="res-count">0</span></span>
+    <span><span class="stat-label">Max Gen:</span> <span class="stat-value" id="max-gen">0</span></span>
+  </div>
+  <canvas id="world"></canvas>
+  <div id="legend">
+    <div class="legend-item"><span class="legend-color" style="background:#4CAF50"></span> Sensor</div>
+    <div class="legend-item"><span class="legend-color" style="background:#F44336"></span> Motor</div>
+    <div class="legend-item"><span class="legend-color" style="background:#2196F3"></span> Inter</div>
+    <div class="legend-item"><span class="legend-color" style="background:#FF9800"></span> Reproductive</div>
+    <div class="legend-item"><span class="legend-color" style="background:#9E9E9E"></span> Undifferentiated</div>
+  </div>
+  <script src="dist/bundle.js"></script>
+</body>
+</html>
