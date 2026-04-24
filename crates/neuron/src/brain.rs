@@ -84,6 +84,8 @@ pub struct OrganicBrain {
     pub context: crate::thinking::ConversationContext,
     /// Inner life — the brain thinks for itself.
     pub inner_life: crate::inner_life::InnerLife,
+    /// Working memory — hold intermediate values, execute step-by-step plans.
+    pub working_memory: crate::working_memory::WorkingMemory,
     tick: u64,
     pub total_queries: u64,
     pub total_training: u64,
@@ -182,6 +184,7 @@ impl OrganicBrain {
             attractor_memory: crate::memory::AttractorMemory::new(),
             context: crate::thinking::ConversationContext::new(5),
             inner_life: crate::inner_life::InnerLife::new(),
+            working_memory: crate::working_memory::WorkingMemory::new(),
             tick: 0,
             total_queries: 0,
             total_training: 0,

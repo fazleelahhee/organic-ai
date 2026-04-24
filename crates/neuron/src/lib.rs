@@ -7,4 +7,5 @@ pub mod brain;      // OrganicBrain — 40M spiking neurons with STDP
 pub mod ring;       // NumberRing — ring attractor for organic math
 pub mod memory;     // AttractorMemory — Hopfield attractor memory, no string storage
 pub mod thinking;   // Reasoning, context, creativity — through Hebbian dynamics
-pub mod inner_life; // The brain thinks for itself — daydreaming, wondering, discovering
+pub mod inner_life;     // The brain thinks for itself — daydreaming, wondering, discovering
+pub mod working_memory; // Prefrontal cortex — hold values, plan steps, execute sequences
