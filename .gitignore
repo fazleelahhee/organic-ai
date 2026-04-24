@@ -6,6 +6,9 @@
 # Claude Code local settings written by cce init
 .claude/settings.local.json
 
+# Rust build artifacts
+target/
+
 # Node / Web visualizer
 node_modules/
 web/dist/

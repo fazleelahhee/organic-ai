@@ -20,4 +20,6 @@ export interface CellSnapshot {
   x: number;
   y: number;
   cell_type: string;
+  spike_active: boolean;
+  information_gain: number;
 }

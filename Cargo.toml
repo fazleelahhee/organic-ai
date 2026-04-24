@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/substrate",
     "crates/growth",
+    "crates/neuron",
     "crates/engine",
     "crates/server",
 ]
