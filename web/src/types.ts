@@ -5,6 +5,9 @@ export interface WorldSnapshot {
   organisms: OrganismSnapshot[];
   resource_count: number;
   organism_count: number;
+  archive_coverage: number;
+  archive_capacity: number;
+  max_generation: number;
 }
 
 export interface OrganismSnapshot {

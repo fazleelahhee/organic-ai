@@ -6,6 +6,7 @@ members = [
     "crates/growth",
     "crates/neuron",
     "crates/engine",
+    "crates/evolution",
     "crates/server",
 ]
 
