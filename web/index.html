@@ -35,6 +35,12 @@
     <span><span class="stat-label">Max Gen:</span> <span class="stat-value" id="max-gen">0</span></span>
     <span><span class="stat-label">QD Coverage:</span> <span class="stat-value" id="coverage">0/0</span></span>
   </div>
+  <div id="input-section" style="margin: 12px 0; display: flex; gap: 8px;">
+    <input type="text" id="user-input" placeholder="Talk to your organism..."
+      style="background: #16213e; color: #e0e0e0; border: 1px solid #333; padding: 6px 12px; font-family: 'Courier New', monospace; flex: 1; max-width: 400px;" />
+    <button id="send-btn" style="background: #4CAF50; color: white; border: none; padding: 6px 16px; cursor: pointer; font-family: 'Courier New', monospace;">Send</button>
+  </div>
+  <div id="response" style="font-size: 0.8rem; color: #4CAF50; margin-bottom: 8px; min-height: 1.2em;"></div>
   <canvas id="world"></canvas>
   <div id="legend">
     <div class="legend-item"><span class="legend-color" style="background:#4CAF50"></span> Sensor</div>
@@ -46,6 +52,9 @@
     <div class="legend-item"><span class="legend-color" style="background:#00BCD4"></span> Pattern</div>
     <div class="legend-item"><span class="legend-color" style="background:#FF5722"></span> Logic</div>
     <div class="legend-item"><span class="legend-color" style="background:#CDDC39"></span> Language</div>
+    <div class="legend-item"><span class="legend-color" style="background:#03A9F4"></span> Search</div>
+    <div class="legend-item"><span class="legend-color" style="background:#9C27B0"></span> LLM</div>
+    <div class="legend-item"><span class="legend-color" style="background:#795548"></span> FileSystem</div>
   </div>
   <script src="dist/bundle.js"></script>
 </body>
