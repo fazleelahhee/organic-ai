@@ -105,16 +105,15 @@ pub fn creative_recall(memory: &AttractorMemory, cue: &str, variations: usize) -
         results.push(original);
     }
 
-    // Generate variations by modifying the cue slightly
-    // Each variation activates slightly different weight patterns
+    // Generate variations by perturbing the cue — like neural noise.
+    // Each perturbation shifts which weight patterns activate.
+    // No hardcoded words — just character-level perturbation.
     for i in 0..variations {
-        // Add context words that shift the cue pattern
-        let modified_cue = match i % 5 {
-            0 => format!("{} beautiful", cue),
-            1 => format!("{} mysterious", cue),
-            2 => format!("the {} of life", cue),
-            3 => format!("{} in the night", cue),
-            4 => format!("a {} story", cue),
+        // Perturb the cue by repeating, truncating, or reversing parts
+        let modified_cue = match i % 3 {
+            0 => format!("{} {}", cue, &cue[..cue.len().min(5)]), // echo start
+            1 => cue.chars().rev().collect::<String>(),            // reverse
+            2 => format!("{}{}", cue, cue),                        // double
             _ => cue.to_string(),
         };
         let variant = memory.recall(&modified_cue);
