@@ -42,6 +42,14 @@ async fn main() {
 
         world.session_memory.record_session_start();
 
+        // Teach the organism language basics — like a parent teaching a child.
+        // Each call is ONE exposure. More exposures = stronger learning.
+        // The organism needs ~5 exposures to confidently learn a word.
+        for _ in 0..6 {
+            organic_neuron::language::teach_basics(&mut world.language);
+        }
+        println!("Language taught — vocabulary: {} words", world.language.vocabulary_size());
+
         loop {
             std::thread::sleep(std::time::Duration::from_millis(16));
             for _ in 0..10 {
@@ -57,11 +65,42 @@ async fn main() {
                     println!("Processing question: {}", req.question);
                     let memory_key = req.question.to_lowercase().trim().to_string();
 
-                    // LAYER 0: Neural arithmetic — organism COMPUTES, doesn't memorize
+                    // LAYER 0: Neural arithmetic — raw math symbols
                     let arithmetic_answer = world.arithmetic.try_compute(&req.question);
 
                     let (response, source) = if let Some(answer) = arithmetic_answer {
                         (answer, "neural arithmetic (computed)")
+
+                    } else if let Some(expression) = world.language.try_understand(&req.question) {
+                        // LAYER 1: Language cortex understood the words → converted to math
+                        // Now compute the resulting expression
+                        if let Some(answer) = world.arithmetic.try_compute(&expression) {
+                            (answer, "language + arithmetic (understood & computed)")
+                        } else {
+                            // Language understood but arithmetic couldn't compute
+                            // Fall through to cortex/memory/claude
+                            if let Some(answer) = world.cortex.try_answer(&req.question) {
+                                (answer, "cortex (learned)")
+                            } else {
+                                let memory_key = req.question.to_lowercase().trim().to_string();
+                                let remembered = world.tool_handler.memory.retrieve(
+                                    string_to_address(&memory_key)
+                                );
+                                if !remembered.is_empty() {
+                                    let text = signals_to_text(&remembered);
+                                    if !text.is_empty() {
+                                        world.cortex.learn(&req.question, &text);
+                                        (text, "memory")
+                                    } else {
+                                        let answer = ask_claude_and_learn(&req.question, &memory_key, &mut world);
+                                        (answer, "claude (fallback)")
+                                    }
+                                } else {
+                                    let answer = ask_claude_and_learn(&req.question, &memory_key, &mut world);
+                                    (answer, "claude (fallback)")
+                                }
+                            }
+                        }
 
                     } else if let Some(answer) = world.cortex.try_answer(&req.question) {
                         (answer, "cortex (learned)")
@@ -90,8 +129,11 @@ async fn main() {
                         }
                     };
 
-                    println!("  → Answered from: {} (cortex exp: {}, accuracy: {:.2})",
-                        source, world.cortex.experience(), world.cortex.accuracy);
+                    // Teach language cortex from every interaction
+                    world.language.learn_from_interaction(&req.question, &response);
+
+                    println!("  → Answered from: {} (vocab: {}, cortex exp: {})",
+                        source, world.language.vocabulary_size(), world.cortex.experience());
 
                     world.session_memory.record_interaction(
                         world.tick_count,

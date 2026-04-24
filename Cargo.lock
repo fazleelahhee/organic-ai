@@ -505,6 +505,7 @@ dependencies = [
  "futures",
  "organic-core",
  "organic-engine",
+ "organic-neuron",
  "organic-substrate",
  "organic-tools",
  "serde",

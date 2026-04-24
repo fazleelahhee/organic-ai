@@ -4,3 +4,4 @@ pub mod curiosity;
 pub mod spike;
 pub mod cortex;
 pub mod arithmetic;
+pub mod language;
