@@ -12,8 +12,10 @@ use organic_substrate::tile::{TileType, ToolType};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+use crate::council::Council;
 use crate::energy;
 use crate::reproduction::mutate_genome;
+use crate::session::SessionMemory;
 
 const MAX_DEVELOPMENT_TICKS: u32 = 50;
 const MAX_CELLS_PER_ORGANISM: usize = 30;
@@ -32,13 +34,21 @@ impl Default for WorldConfig {
     }
 }
 
+fn default_rng() -> rand::rngs::ThreadRng {
+    rand::thread_rng()
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct World {
     pub grid: Grid,
     pub organisms: Vec<Organism>,
     pub tick_count: u64,
     pub qd_archive: QDArchive,
     pub tool_handler: ToolHandler,
+    pub session_memory: SessionMemory,
+    pub council: Council,
     next_organism_id: OrganismId,
+    #[serde(skip, default = "default_rng")]
     rng: rand::rngs::ThreadRng,
 }
 
@@ -61,6 +71,9 @@ pub struct WorldSnapshot {
     pub archive_capacity: usize,
     pub max_generation: u32,
     pub tool_positions: Vec<ToolTileSnapshot>,
+    pub total_sessions: u32,
+    pub total_messages: u32,
+    pub council_size: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,7 +125,7 @@ impl World {
             }
         }
 
-        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), next_organism_id: next_id, rng }
+        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), session_memory: SessionMemory::new(), council: Council::new(5), next_organism_id: next_id, rng }
     }
 
     pub fn allocate_organism_id(&mut self) -> OrganismId {
@@ -313,6 +326,11 @@ impl World {
             self.tool_handler.safety.reset();
         }
 
+        // Update council every 500 ticks
+        if self.tick_count % 500 == 0 {
+            self.council.update(&self.organisms);
+        }
+
         self.organisms.retain(|o| o.is_alive());
         self.tick_count += 1;
     }
@@ -354,6 +372,9 @@ impl World {
                 }
                 tools
             },
+            total_sessions: self.session_memory.total_sessions,
+            total_messages: self.session_memory.total_messages_received,
+            council_size: self.council.size(),
         }
     }
 }

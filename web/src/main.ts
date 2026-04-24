@@ -48,6 +48,11 @@ function renderLoop() {
     if (coverageEl) {
       coverageEl.textContent = `${latestSnapshot.archive_coverage}/${latestSnapshot.archive_capacity}`;
     }
+
+    const sessionsEl = document.getElementById("sessions");
+    if (sessionsEl) sessionsEl.textContent = latestSnapshot.total_sessions.toString();
+    const councilEl = document.getElementById("council");
+    if (councilEl) councilEl.textContent = latestSnapshot.council_size.toString();
   }
   requestAnimationFrame(renderLoop);
 }
