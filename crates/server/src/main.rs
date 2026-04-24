@@ -40,18 +40,13 @@ async fn main() {
         };
 
         world.session_memory.record_session_start();
-
         let stats = world.brain.stats();
-        println!("Brain: {} neurons, {} synapses, trained {} times",
-            stats.total_neurons, stats.total_synapses, stats.total_training);
+        println!("Brain: {} neurons, {} synapses", stats.total_neurons, stats.total_synapses);
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(16));
-            for _ in 0..10 {
-                world.tick();
-            }
+            for _ in 0..10 { world.tick(); }
 
-            // Process pending user questions
             if let Ok(mut queue) = sim_queue.try_lock() {
                 let requests: Vec<user_input::PendingRequest> = queue.drain(..).collect();
                 drop(queue);
@@ -59,56 +54,35 @@ async fn main() {
                 for req in requests {
                     println!("Processing: \"{}\"", req.question);
 
-                    // === ORGANIC PIPELINE ===
-                    // ONE path: the brain processes everything.
-                    // If the brain can't answer → Claude teaches it.
-                    // No routing. No if/else. No parsers. No dictionaries.
-                    // The brain IS the intelligence.
-
-                    // Let the brain try to answer
+                    // Brain tries. Claude teaches. Nothing else.
                     let brain_output = world.brain.process(&req.question);
-                    let brain_has_answer = !brain_output.is_empty()
+                    let brain_answered = !brain_output.is_empty()
                         && brain_output.chars().any(|c| c.is_alphanumeric())
                         && world.brain.is_trained();
 
-                    let (response, source) = if brain_has_answer {
-                        // Brain answered from its own spiking network
+                    let (response, source) = if brain_answered {
                         (brain_output, "brain")
                     } else {
-                        // Brain doesn't know yet — ask Claude to TEACH it
                         let result = organic_tools::external::llm_query(&req.question);
-                        let answer = if result.success {
-                            result.output.clone()
-                        } else {
-                            "I don't know yet.".to_string()
-                        };
-                        (answer, "claude (teaching)")
+                        let answer = if result.success { result.output.clone() } else { "I don't know yet.".to_string() };
+                        (answer, "claude")
                     };
 
-                    // Send response immediately
                     let _ = req.response_tx.send(response.clone());
-                    println!("  → {} (response sent)", source);
+                    println!("  → {}", source);
 
-                    // ALWAYS train the brain — whether it answered or Claude did.
-                    // When the brain answered: reinforcement (strengthen existing pathways)
-                    // When Claude answered: new learning (form new pathways)
                     world.brain.train(&req.question, &response);
-
                     world.session_memory.record_interaction(
                         world.tick_count, &req.question,
                         if source == "brain" { 2.0 } else { 0.5 },
                     );
-
-                    println!("  → brain trained (total: {})", world.brain.total_training);
                 }
             }
 
             let snap = world.snapshot();
             if snap.tick % 1000 == 0 {
-                println!(
-                    "tick {} | organisms: {} | resources: {}",
-                    snap.tick, snap.organism_count, snap.resource_count
-                );
+                println!("tick {} | organisms: {} | resources: {}",
+                    snap.tick, snap.organism_count, snap.resource_count);
             }
             if snap.tick % 5000 == 0 && snap.tick > 0 {
                 let _ = organic_engine::persistence::save_world(&world, &save_path);
@@ -127,10 +101,7 @@ async fn main() {
         .layer(axum::Extension(request_queue))
         .with_state(snapshot_rx);
 
-    let addr = "0.0.0.0:3000";
     println!("Server running at http://localhost:3000");
-    println!("WebSocket at ws://localhost:3000/ws");
-
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
