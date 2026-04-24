@@ -1,0 +1,23 @@
+export interface WorldSnapshot {
+  tick: number;
+  grid_width: number;
+  grid_height: number;
+  organisms: OrganismSnapshot[];
+  resource_count: number;
+  organism_count: number;
+}
+
+export interface OrganismSnapshot {
+  id: number;
+  cells: CellSnapshot[];
+  energy: number;
+  phase: string;
+  generation: number;
+  age: number;
+}
+
+export interface CellSnapshot {
+  x: number;
+  y: number;
+  cell_type: string;
+}
