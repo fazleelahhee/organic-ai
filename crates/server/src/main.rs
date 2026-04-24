@@ -41,15 +41,9 @@ async fn main() {
 
         world.session_memory.record_session_start();
 
-        // Teach language basics through exposure
-        for _ in 0..6 {
-            organic_neuron::language::teach_basics(&mut world.language);
-        }
-
         let stats = world.brain.stats();
         println!("Brain: {} neurons, {} synapses, trained {} times",
             stats.total_neurons, stats.total_synapses, stats.total_training);
-        println!("Language: {} words learned", world.language.vocabulary_size());
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(16));
@@ -65,73 +59,46 @@ async fn main() {
                 for req in requests {
                     println!("Processing: \"{}\"", req.question);
 
-                    // === PIPELINE ===
-                    // 1. ARITHMETIC (instant) — raw math + language math
-                    // 2. MEMORY (instant) — organism recalls from past experience
-                    // 3. CLAUDE (fallback) — organism learns from the answer
-                    // Brain trains in background on every answer.
+                    // === ORGANIC PIPELINE ===
+                    // ONE path: the brain processes everything.
+                    // If the brain can't answer → Claude teaches it.
+                    // No routing. No if/else. No parsers. No dictionaries.
+                    // The brain IS the intelligence.
 
-                    let memory_key = req.question.to_lowercase().trim().to_string();
+                    // Let the brain try to answer
+                    let brain_output = world.brain.process(&req.question);
+                    let brain_has_answer = !brain_output.is_empty()
+                        && brain_output.chars().any(|c| c.is_alphanumeric())
+                        && world.brain.is_trained();
 
-                    // Step 0: Algorithm processor — sorting, searching, fibonacci, etc.
-                    let algo_answer = world.processor.try_process(&req.question);
-
-                    // Step 1: Neural math — spike population dynamics
-                    let math_answer = if algo_answer.is_some() { None } else {
-                        world.neural_math.try_compute(&req.question)
-                            .or_else(|| {
-                                world.language.try_understand(&req.question)
-                                    .and_then(|expr| world.neural_math.try_compute(&expr))
-                            })
-                    };
-
-                    let (response, source) = if let Some(answer) = algo_answer {
-                        (answer, "algorithm (neural processor)")
-                    } else if let Some(answer) = math_answer {
-                        (answer, "arithmetic")
+                    let (response, source) = if brain_has_answer {
+                        // Brain answered from its own spiking network
+                        (brain_output, "brain")
                     } else {
-                        // Step 2: Check memory — has the organism seen this before?
-                        let remembered = world.tool_handler.memory.retrieve(
-                            string_to_address(&memory_key)
-                        );
-                        let mem_text = if !remembered.is_empty() {
-                            let t = signals_to_text(&remembered);
-                            if !t.is_empty() { Some(t) } else { None }
-                        } else { None };
-
-                        if let Some(answer) = mem_text {
-                            (answer, "memory (recalled)")
+                        // Brain doesn't know yet — ask Claude to TEACH it
+                        let result = organic_tools::external::llm_query(&req.question);
+                        let answer = if result.success {
+                            result.output.clone()
                         } else {
-                            // Step 3: Ask Claude — organism learns
-                            let result = organic_tools::external::llm_query(&req.question);
-                            let answer = if result.success {
-                                result.output.clone()
-                            } else {
-                                "I don't know yet.".to_string()
-                            };
-                            // Store in memory for next time
-                            let signals = text_to_store_signals(&answer);
-                            world.tool_handler.memory.store(
-                                string_to_address(&memory_key), signals
-                            );
-                            (answer, "claude (learned)")
-                        }
+                            "I don't know yet.".to_string()
+                        };
+                        (answer, "claude (teaching)")
                     };
 
-                    // Send response IMMEDIATELY — don't block on brain training
+                    // Send response immediately
                     let _ = req.response_tx.send(response.clone());
-
                     println!("  → {} (response sent)", source);
 
-                    // Learn AFTER responding (non-blocking for the user)
-                    world.language.learn_from_interaction(&req.question, &response);
+                    // ALWAYS train the brain — whether it answered or Claude did.
+                    // When the brain answered: reinforcement (strengthen existing pathways)
+                    // When Claude answered: new learning (form new pathways)
+                    world.brain.train(&req.question, &response);
+
                     world.session_memory.record_interaction(
                         world.tick_count, &req.question,
-                        if source.starts_with("arithmetic") { 1.5 } else { 0.5 },
+                        if source == "brain" { 2.0 } else { 0.5 },
                     );
 
-                    // Train brain in background — this is slow at 40M but doesn't block response
-                    world.brain.train(&req.question, &response);
                     println!("  → brain trained (total: {})", world.brain.total_training);
                 }
             }
@@ -166,26 +133,4 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
-}
-
-fn string_to_address(s: &str) -> f32 {
-    let mut hash = 5381u64;
-    for (i, b) in s.bytes().enumerate() {
-        hash = hash.wrapping_mul(33).wrapping_add(b as u64).wrapping_add(i as u64 * 257);
-    }
-    (hash % 1000000) as f32 / 1000000.0
-}
-
-fn text_to_store_signals(text: &str) -> Vec<f32> {
-    text.bytes().take(200).map(|b| b as f32 / 255.0).collect()
-}
-
-fn signals_to_text(signals: &[f32]) -> String {
-    signals.iter()
-        .map(|&s| (s * 255.0) as u8)
-        .filter(|&b| b >= 32 && b < 127)
-        .map(|b| b as char)
-        .collect::<String>()
-        .trim()
-        .to_string()
 }
