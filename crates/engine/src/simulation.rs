@@ -61,6 +61,8 @@ pub struct CellSnapshot {
     pub x: i32,
     pub y: i32,
     pub cell_type: CellType,
+    pub spike_active: bool,
+    pub information_gain: f32,
 }
 
 impl World {
@@ -242,7 +244,7 @@ impl World {
             grid_height: self.grid.dimensions().1,
             organisms: self.organisms.iter().map(|o| OrganismSnapshot {
                 id: o.id,
-                cells: o.cells.iter().map(|c| CellSnapshot { x: c.position.x, y: c.position.y, cell_type: c.cell_type }).collect(),
+                cells: o.cells.iter().map(|c| CellSnapshot { x: c.position.x, y: c.position.y, cell_type: c.cell_type, spike_active: c.spike_active, information_gain: c.information_gain }).collect(),
                 energy: o.energy,
                 phase: o.phase,
                 generation: o.generation,
