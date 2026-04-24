@@ -9,5 +9,6 @@ members = [
     "crates/evolution",
     "crates/server",
     "crates/tools",
+    "crates/network",
 ]
 
