@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 organic-core = { path = "../core" }
 rand = "0.8"
+rayon = "1"
 serde = { version = "1", features = ["derive"] }
