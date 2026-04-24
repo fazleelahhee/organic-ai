@@ -1,0 +1,9 @@
+[package]
+name = "organic-growth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+organic-core = { path = "../core" }
+organic-substrate = { path = "../substrate" }
+rand = "0.8"
