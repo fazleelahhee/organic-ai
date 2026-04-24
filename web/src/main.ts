@@ -54,3 +54,30 @@ function renderLoop() {
 
 connectWebSocket();
 renderLoop();
+
+// User input handling
+const inputEl = document.getElementById("user-input") as HTMLInputElement;
+const sendBtn = document.getElementById("send-btn")!;
+const responseEl = document.getElementById("response")!;
+
+sendBtn.addEventListener("click", async () => {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  try {
+    const res = await fetch("/api/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    responseEl.textContent = data.message;
+    inputEl.value = "";
+  } catch {
+    responseEl.textContent = "Failed to send message";
+  }
+});
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendBtn.click();
+});

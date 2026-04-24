@@ -13,6 +13,9 @@ const TOOL_COLORS: Record<string, string> = {
   Pattern: "#00BCD4",   // cyan
   Logic: "#FF5722",     // deep orange
   Language: "#CDDC39",  // lime
+  Search: "#03A9F4",     // light blue
+  LLM: "#9C27B0",        // deep purple
+  FileSystem: "#795548",  // brown
 };
 
 const BG_COLOR = "#1a1a2e";

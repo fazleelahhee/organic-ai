@@ -2,10 +2,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ToolType {
-    Memory,   // store/retrieve signal patterns
-    Pattern,  // compare two patterns
-    Logic,    // boolean/arithmetic on signals
-    Language, // tokenize/detokenize (proto-language)
+    Memory,     // store/retrieve signal patterns
+    Pattern,    // compare two patterns
+    Logic,      // boolean/arithmetic on signals
+    Language,   // tokenize/detokenize (proto-language)
+    // External (M5)
+    Search,     // web search
+    LLM,        // language model query
+    FileSystem, // file read/write
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
