@@ -4,8 +4,10 @@ use crate::pattern::pattern_similarity;
 use crate::logic::{apply_logic, LogicOp};
 use crate::external;
 use crate::safety::SafetyLayer;
+use serde::{Deserialize, Serialize};
 
 /// Global tool state — shared across all organisms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolHandler {
     pub memory: ToolMemory,
     pub safety: SafetyLayer,

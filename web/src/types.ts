@@ -15,6 +15,9 @@ export interface WorldSnapshot {
   archive_capacity: number;
   max_generation: number;
   tool_positions: ToolTileSnapshot[];
+  total_sessions: number;
+  total_messages: number;
+  council_size: number;
 }
 
 export interface OrganismSnapshot {
