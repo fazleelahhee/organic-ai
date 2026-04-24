@@ -67,25 +67,46 @@ async fn main() {
 
                     // === PIPELINE ===
                     // 1. ARITHMETIC (instant) — raw math + language math
-                    // 2. CLAUDE (fallback) — trains the brain with the answer
-                    // Brain training happens in background on every answer.
+                    // 2. MEMORY (instant) — organism recalls from past experience
+                    // 3. CLAUDE (fallback) — organism learns from the answer
+                    // Brain trains in background on every answer.
 
-                    // Try arithmetic first (instant)
+                    let memory_key = req.question.to_lowercase().trim().to_string();
+
+                    // Step 1: Try arithmetic (instant)
                     let math_answer = world.language.try_understand(&req.question)
                         .and_then(|expr| world.arithmetic.try_compute(&expr))
                         .or_else(|| world.arithmetic.try_compute(&req.question));
 
                     let (response, source) = if let Some(answer) = math_answer {
-                        (answer, "arithmetic (computed)")
+                        (answer, "arithmetic")
                     } else {
-                        // Ask Claude
-                        let result = organic_tools::external::llm_query(&req.question);
-                        let answer = if result.success {
-                            result.output.clone()
+                        // Step 2: Check memory — has the organism seen this before?
+                        let remembered = world.tool_handler.memory.retrieve(
+                            string_to_address(&memory_key)
+                        );
+                        let mem_text = if !remembered.is_empty() {
+                            let t = signals_to_text(&remembered);
+                            if !t.is_empty() { Some(t) } else { None }
+                        } else { None };
+
+                        if let Some(answer) = mem_text {
+                            (answer, "memory (recalled)")
                         } else {
-                            "I don't know yet.".to_string()
-                        };
-                        (answer, "claude")
+                            // Step 3: Ask Claude — organism learns
+                            let result = organic_tools::external::llm_query(&req.question);
+                            let answer = if result.success {
+                                result.output.clone()
+                            } else {
+                                "I don't know yet.".to_string()
+                            };
+                            // Store in memory for next time
+                            let signals = text_to_store_signals(&answer);
+                            world.tool_handler.memory.store(
+                                string_to_address(&memory_key), signals
+                            );
+                            (answer, "claude (learned)")
+                        }
                     };
 
                     // Send response IMMEDIATELY — don't block on brain training
@@ -136,4 +157,26 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn string_to_address(s: &str) -> f32 {
+    let mut hash = 5381u64;
+    for (i, b) in s.bytes().enumerate() {
+        hash = hash.wrapping_mul(33).wrapping_add(b as u64).wrapping_add(i as u64 * 257);
+    }
+    (hash % 1000000) as f32 / 1000000.0
+}
+
+fn text_to_store_signals(text: &str) -> Vec<f32> {
+    text.bytes().take(200).map(|b| b as f32 / 255.0).collect()
+}
+
+fn signals_to_text(signals: &[f32]) -> String {
+    signals.iter()
+        .map(|&s| (s * 255.0) as u8)
+        .filter(|&b| b >= 32 && b < 127)
+        .map(|b| b as char)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
