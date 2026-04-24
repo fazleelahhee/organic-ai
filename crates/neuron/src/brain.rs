@@ -301,7 +301,8 @@ impl OrganicBrain {
         }
 
         let input = self.encode_to_spikes(query);
-        self.run_ticks(&input, SPIKE_HISTORY_LEN * 2, false); // no learning during query
+        // At 40M neurons, each tick is ~1.4s. Run just 2 ticks for fast response.
+        self.run_ticks(&input, 2, false);
         self.total_queries += 1;
         self.decode_from_rates()
     }
@@ -314,21 +315,18 @@ impl OrganicBrain {
         let input_pattern = self.encode_to_spikes(input_text);
         let output_pattern = self.encode_to_spikes(output_text);
 
-        // Phase 1: Present input — let it propagate through the network
-        self.run_ticks(&input_pattern, SPIKE_HISTORY_LEN, true);
+        // Phase 1: Present input — let it propagate (1 tick at 40M scale)
+        self.run_ticks(&input_pattern, 1, true);
 
-        // Phase 2: Clamp output neurons to desired pattern — creates
-        // temporal correlation between input-driven hidden activity
-        // and correct output activity. STDP wires them together.
+        // Phase 2: Clamp output neurons to desired pattern — STDP wires them
         let output_start = self.input_pop + self.hidden_pop;
         for i in 0..self.output_pop {
             let target_rate = output_pattern.get(i).copied().unwrap_or(0.0);
             if target_rate > 0.3 {
-                // Force this output neuron to fire — creates the association
                 self.neurons[output_start + i].potential = self.lif_params.threshold + 0.1;
             }
         }
-        self.run_ticks(&input_pattern, SPIKE_HISTORY_LEN, true);
+        self.run_ticks(&input_pattern, 1, true);
 
         self.total_training += 1;
     }

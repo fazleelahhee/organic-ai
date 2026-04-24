@@ -65,72 +65,44 @@ async fn main() {
                 for req in requests {
                     println!("Processing: \"{}\"", req.question);
 
-                    // === THE GENUINE PIPELINE ===
-                    //
-                    // 1. BRAIN: Process through 2048-neuron spiking network (always)
-                    // 2. LANGUAGE + ARITHMETIC: If brain output is weak, try
-                    //    language translation → spike-based arithmetic
-                    // 3. CLAUDE: Last resort — but we use the answer to TRAIN
-                    //    the brain, not just cache it
+                    // === PIPELINE ===
+                    // 1. ARITHMETIC (instant) — raw math + language math
+                    // 2. CLAUDE (fallback) — trains the brain with the answer
+                    // Brain training happens in background on every answer.
 
-                    // Step 1: Let the brain try
-                    let brain_output = world.brain.process(&req.question);
-                    let brain_confident = !brain_output.is_empty()
-                        && brain_output.len() > 0
-                        && world.brain.is_trained();
+                    // Try arithmetic first (instant)
+                    let math_answer = world.language.try_understand(&req.question)
+                        .and_then(|expr| world.arithmetic.try_compute(&expr))
+                        .or_else(|| world.arithmetic.try_compute(&req.question));
 
-                    let (response, source) = if brain_confident && brain_output.chars().any(|c| c.is_alphanumeric()) {
-                        // Brain produced a meaningful response
-                        (brain_output, "brain (spiking network)")
+                    let (response, source) = if let Some(answer) = math_answer {
+                        (answer, "arithmetic (computed)")
                     } else {
-                        // Step 2: Try language → arithmetic path for math
-                        let math_answer = if let Some(expr) = world.language.try_understand(&req.question) {
-                            world.arithmetic.try_compute(&expr)
+                        // Ask Claude
+                        let result = organic_tools::external::llm_query(&req.question);
+                        let answer = if result.success {
+                            result.output.clone()
                         } else {
-                            world.arithmetic.try_compute(&req.question)
+                            "I don't know yet.".to_string()
                         };
-
-                        if let Some(answer) = math_answer {
-                            // Train the brain with this correct answer
-                            world.brain.train(&req.question, &answer);
-                            (answer, "arithmetic (computed) → trained brain")
-                        } else {
-                            // Step 3: Ask Claude — use answer to train the brain
-                            let result = organic_tools::external::llm_query(&req.question);
-                            let answer = if result.success {
-                                result.output.clone()
-                            } else {
-                                "I don't know yet.".to_string()
-                            };
-
-                            // TRAIN the brain with Claude's answer
-                            // This is the key: Claude is a teacher, not a crutch.
-                            // The brain's STDP will wire the association between
-                            // the question's spike pattern and the answer's spike pattern.
-                            for _ in 0..3 { // multiple exposures to strengthen
-                                world.brain.train(&req.question, &answer);
-                            }
-
-                            (answer, "claude → trained brain (3x)")
-                        }
+                        (answer, "claude")
                     };
 
-                    // Teach language from interaction
+                    // Send response IMMEDIATELY — don't block on brain training
+                    let _ = req.response_tx.send(response.clone());
+
+                    println!("  → {} (response sent)", source);
+
+                    // Learn AFTER responding (non-blocking for the user)
                     world.language.learn_from_interaction(&req.question, &response);
-
-                    let stats = world.brain.stats();
-                    println!("  → {} | brain: {} trained, {} active neurons, avg_w: {:.4}",
-                        source, stats.total_training, stats.active_neurons, stats.avg_weight);
-
                     world.session_memory.record_interaction(
-                        world.tick_count,
-                        &req.question,
-                        if source.starts_with("brain") { 2.0 }
-                        else if source.starts_with("arithmetic") { 1.5 }
-                        else { 0.5 },
+                        world.tick_count, &req.question,
+                        if source.starts_with("arithmetic") { 1.5 } else { 0.5 },
                     );
 
-                    let _ = req.response_tx.send(response);
+                    // Train brain in background — this is slow at 40M but doesn't block response
+                    world.brain.train(&req.question, &response);
+                    println!("  → brain trained (total: {})", world.brain.total_training);
                 }
             }
 
