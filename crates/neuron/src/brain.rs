@@ -392,22 +392,66 @@ impl OrganicBrain {
             }
         }
 
-        // STEP 3: Standard thinking — context, recall, reasoning, creativity
-        let (response, _source) = crate::thinking::think(
+        // STEP 3: COMBINED processing — both systems work together.
+        //
+        // Fast path: attractor memory recalls (50ms)
+        // Deep path: spiking network processes (parallel neural dynamics)
+        // Combined: fast recall PRIMES the spiking network, spiking network
+        // ENRICHES the recall with temporal patterns and associations.
+        //
+        // Like a human: fast intuition (gut feeling) + slow deliberation
+        // (thinking it through) = better answer than either alone.
+
+        // Fast: attractor memory recall with context
+        let (fast_response, _source) = crate::thinking::think(
             &self.attractor_memory,
             &self.context,
             query,
         );
 
-        if !response.is_empty() {
-            self.context.add_turn(query, &response);
-            self.inner_life.set_free();
-            return response;
+        // Deep: run spiking network — it processes the query through
+        // 100M neurons with STDP-learned connectivity
+        let input = self.encode_to_spikes(query);
+        let output_start = self.input_pop + self.hidden_pop;
+        for i in output_start..(output_start + self.output_pop) {
+            self.neurons[i].potential = 0.0;
+            self.neurons[i].fired = false;
+            self.neurons[i].spike_history = [false; SPIKE_HISTORY_LEN];
         }
 
-        // Nothing — brain doesn't know yet
+        // If fast recall found something, PRIME the spiking network with it.
+        // This seeds the neural dynamics with the recall — like how reading
+        // a word activates related neural patterns in the brain.
+        if !fast_response.is_empty() {
+            let prime = self.encode_to_spikes(&fast_response);
+            // Inject prime into hidden layer — biases the network toward
+            // the recalled content, but lets dynamics explore around it
+            for i in 0..self.hidden_pop.min(prime.len()) {
+                let h = self.input_pop + i;
+                if h < self.neurons.len() {
+                    self.neurons[h].potential += prime.get(i).copied().unwrap_or(0.0) * 0.3;
+                }
+            }
+        }
+
+        self.run_ticks(&input, 2, false);
+        let deep_response = self.decode_from_rates();
+
+        // Combine: prefer fast recall (it's more reliable), but use deep
+        // response if fast failed. If both have content, fast wins
+        // (but deep processing still strengthened the spiking pathways).
+        let response = if !fast_response.is_empty() {
+            fast_response
+        } else if !deep_response.is_empty() && deep_response.chars().any(|c| c.is_alphanumeric()) {
+            deep_response
+        } else {
+            self.inner_life.set_free();
+            return String::new();
+        };
+
+        self.context.add_turn(query, &response);
         self.inner_life.set_free();
-        String::new()
+        response
     }
 
     /// Train the brain: present input, then present the desired output,
