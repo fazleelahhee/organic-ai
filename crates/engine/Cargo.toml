@@ -12,6 +12,7 @@ organic-evolution = { path = "../evolution" }
 organic-tools = { path = "../tools" }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
+bincode = "1"
 
 [dev-dependencies]
 serde_json = "1"

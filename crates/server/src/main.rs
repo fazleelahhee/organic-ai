@@ -21,7 +21,23 @@ async fn main() {
     let snapshot_rx = Arc::new(snapshot_rx);
 
     std::thread::spawn(move || {
-        let mut world = World::new(config);
+        // Try to load saved world
+        let save_path = organic_engine::persistence::default_save_path();
+        let _ = std::fs::create_dir_all("data");
+
+        let mut world = match organic_engine::persistence::load_world(&save_path) {
+            Ok(world) => {
+                println!("Loaded saved world — tick {}, {} organisms", world.tick_count, world.organisms.len());
+                world
+            }
+            Err(_) => {
+                println!("No save found, creating new world");
+                World::new(config)
+            }
+        };
+
+        world.session_memory.record_session_start();
+
         loop {
             std::thread::sleep(std::time::Duration::from_millis(16));
             for _ in 0..10 {
@@ -33,6 +49,10 @@ async fn main() {
                     "tick {} | organisms: {} | resources: {}",
                     snap.tick, snap.organism_count, snap.resource_count
                 );
+            }
+            if snap.tick % 5000 == 0 && snap.tick > 0 {
+                let _ = organic_engine::persistence::save_world(&world, &save_path);
+                println!("Auto-saved at tick {}", snap.tick);
             }
             let json = snapshot::to_json(&snap);
             let _ = snapshot_tx.send(json);
