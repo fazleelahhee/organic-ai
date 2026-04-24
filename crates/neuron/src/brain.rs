@@ -26,9 +26,10 @@ const SPIKE_HISTORY_LEN: usize = 8;
 /// A synapse in the brain — an incoming connection from source to this neuron.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BrainSynapse {
-    source: u32,         // source neuron index (where input comes FROM)
+    source: u32,
     weight: f32,
     last_pre_tick: u64,
+    eligibility: f32,    // trace of recent activity — for three-factor learning
 }
 
 /// A single neuron in the brain.
@@ -126,7 +127,7 @@ impl OrganicBrain {
             for _ in 0..synapses_per.max(4) {
                 let src = fast_rand(&mut seed, input_pop);
                 neurons[h].synapses.push(BrainSynapse {
-                    source: src as u32, weight: 0.15, last_pre_tick: 0,
+                    source: src as u32, weight: 0.25, last_pre_tick: 0, eligibility: 0.0,
                 });
             }
             // Lateral inhibition within hidden
@@ -134,7 +135,7 @@ impl OrganicBrain {
                 let src = input_pop + fast_rand(&mut seed, hidden_pop);
                 if src != h {
                     neurons[h].synapses.push(BrainSynapse {
-                        source: src as u32, weight: -0.3, last_pre_tick: 0,
+                        source: src as u32, weight: -0.3, last_pre_tick: 0, eligibility: 0.0,
                     });
                 }
             }
@@ -145,7 +146,7 @@ impl OrganicBrain {
             for _ in 0..synapses_per.max(4) {
                 let src = input_pop + fast_rand(&mut seed, hidden_pop);
                 neurons[o].synapses.push(BrainSynapse {
-                    source: src as u32, weight: 0.15, last_pre_tick: 0,
+                    source: src as u32, weight: 0.25, last_pre_tick: 0, eligibility: 0.0,
                 });
             }
             // Lateral inhibition within output
@@ -153,7 +154,7 @@ impl OrganicBrain {
                 let src = input_pop + hidden_pop + fast_rand(&mut seed, output_pop);
                 if src != o {
                     neurons[o].synapses.push(BrainSynapse {
-                        source: src as u32, weight: -0.3, last_pre_tick: 0,
+                        source: src as u32, weight: -0.3, last_pre_tick: 0, eligibility: 0.0,
                     });
                 }
             }
@@ -183,21 +184,13 @@ impl OrganicBrain {
         let mut input = vec![0.0f32; self.input_pop];
         for (pos, byte) in text.bytes().enumerate() {
             let b = byte as usize;
-            // Each character activates ~8 neurons in a distributed pattern
-            // Using prime multipliers to spread activation
-            let indices = [
-                b % self.input_pop,
-                (b * 7 + pos * 3) % self.input_pop,
-                (b * 13 + pos * 7) % self.input_pop,
-                (b * 31 + pos * 11) % self.input_pop,
-                (b * 37 + pos * 17) % self.input_pop,
-                (b.wrapping_mul(41).wrapping_add(pos * 23)) % self.input_pop,
-                (b.wrapping_mul(53).wrapping_add(pos * 29)) % self.input_pop,
-                (b.wrapping_mul(61).wrapping_add(pos * 31)) % self.input_pop,
-            ];
-            for &idx in &indices {
-                input[idx] += 0.15;
-            }
+            // Position-sensitive encoding — same character at different positions
+            // activates DIFFERENT neurons. This lets the brain distinguish
+            // "Japan" from "France" even in similar sentences.
+            let idx1 = (b * 127 + pos * 251) % self.input_pop;
+            let idx2 = (b * 67 + pos * 139) % self.input_pop;
+            input[idx1] = 1.0;
+            input[idx2] = 0.7;
         }
         // Normalize to [0, 1]
         let max = input.iter().cloned().fold(0.0f32, f32::max);
@@ -263,18 +256,24 @@ impl OrganicBrain {
                     total_input += input.get(i).copied().unwrap_or(0.0);
                 }
 
-                // Synaptic input — includes both excitatory (positive) and inhibitory (negative)
+                // Synaptic input + eligibility trace updates
                 let synapse_count = self.neurons[i].synapses.len();
                 for s in 0..synapse_count {
                     let source = self.neurons[i].synapses[s].source;
                     if fired_set.contains(&source) {
-                        total_input += self.neurons[i].synapses[s].weight; // negative = inhibition
+                        total_input += self.neurons[i].synapses[s].weight;
                         self.neurons[i].synapses[s].last_pre_tick = self.tick;
+                        // Mark eligible for learning
+                        if self.neurons[i].synapses[s].weight > 0.0 {
+                            self.neurons[i].synapses[s].eligibility = 1.0;
+                        }
                     }
+                    // Decay eligibility trace
+                    self.neurons[i].synapses[s].eligibility *= 0.9;
                 }
 
-                // Multiplicative leak (better stability than subtractive)
-                self.neurons[i].potential *= 0.9;
+                // Multiplicative leak
+                self.neurons[i].potential *= 0.85;
                 self.neurons[i].potential += total_input;
                 if self.neurons[i].potential < 0.0 { self.neurons[i].potential = 0.0; }
 
@@ -286,21 +285,22 @@ impl OrganicBrain {
                     self.neurons[i].last_fire_tick = self.tick;
                 }
 
-                // STDP learning — only on excitatory synapses during training
+                // THREE-FACTOR LEARNING: STDP × eligibility × reward
+                // Only strengthen synapses that were part of the causal chain
                 if learn && fired {
-                    let post_tick = self.tick;
                     let synapse_count = self.neurons[i].synapses.len();
                     for s in 0..synapse_count {
-                        if self.neurons[i].synapses[s].weight > 0.0 { // excitatory only
-                            let pre_tick = self.neurons[i].synapses[s].last_pre_tick;
-                            if pre_tick > 0 {
-                                apply_stdp(
-                                    &mut self.neurons[i].synapses[s].weight,
-                                    pre_tick,
-                                    post_tick,
-                                    0.0,
-                                    &self.stdp_params,
-                                );
+                        let w = self.neurons[i].synapses[s].weight;
+                        let elig = self.neurons[i].synapses[s].eligibility;
+                        let pre_tick = self.neurons[i].synapses[s].last_pre_tick;
+                        if w > 0.0 && elig > 0.1 && pre_tick > 0 {
+                            let dt = self.tick - pre_tick;
+                            if dt > 0 && dt < 8 {
+                                let delta = 0.02 * elig * (1.0 - dt as f32 / 8.0);
+                                self.neurons[i].synapses[s].weight += delta;
+                                if self.neurons[i].synapses[s].weight > 2.0 {
+                                    self.neurons[i].synapses[s].weight = 2.0;
+                                }
                             }
                         }
                     }
