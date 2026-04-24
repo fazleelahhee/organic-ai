@@ -7,3 +7,4 @@ pub mod arithmetic;
 pub mod language;
 pub mod brain;
 pub mod neural_math;
+pub mod algorithm;

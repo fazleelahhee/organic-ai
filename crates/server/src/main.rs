@@ -73,15 +73,21 @@ async fn main() {
 
                     let memory_key = req.question.to_lowercase().trim().to_string();
 
-                    // Step 1: Neural math — spike population dynamics (genuine neural computation)
-                    let math_answer = world.neural_math.try_compute(&req.question)
-                        .or_else(|| {
-                            // Try language translation for word-based math
-                            world.language.try_understand(&req.question)
-                                .and_then(|expr| world.neural_math.try_compute(&expr))
-                        });
+                    // Step 0: Algorithm processor — sorting, searching, fibonacci, etc.
+                    let algo_answer = world.processor.try_process(&req.question);
 
-                    let (response, source) = if let Some(answer) = math_answer {
+                    // Step 1: Neural math — spike population dynamics
+                    let math_answer = if algo_answer.is_some() { None } else {
+                        world.neural_math.try_compute(&req.question)
+                            .or_else(|| {
+                                world.language.try_understand(&req.question)
+                                    .and_then(|expr| world.neural_math.try_compute(&expr))
+                            })
+                    };
+
+                    let (response, source) = if let Some(answer) = algo_answer {
+                        (answer, "algorithm (neural processor)")
+                    } else if let Some(answer) = math_answer {
                         (answer, "arithmetic")
                     } else {
                         // Step 2: Check memory — has the organism seen this before?
