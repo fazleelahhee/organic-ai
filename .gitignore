@@ -5,3 +5,7 @@
 .cce/
 # Claude Code local settings written by cce init
 .claude/settings.local.json
+
+# Node / Web visualizer
+node_modules/
+web/dist/
