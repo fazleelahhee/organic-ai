@@ -450,12 +450,22 @@ name = "organic-engine"
 version = "0.1.0"
 dependencies = [
  "organic-core",
+ "organic-evolution",
  "organic-growth",
  "organic-neuron",
  "organic-substrate",
  "rand",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "organic-evolution"
+version = "0.1.0"
+dependencies = [
+ "organic-core",
+ "rand",
+ "serde",
 ]
 
 [[package]]
