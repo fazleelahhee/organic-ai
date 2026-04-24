@@ -69,6 +69,11 @@ sendBtn.addEventListener("click", async () => {
   const text = inputEl.value.trim();
   if (!text) return;
 
+  // Show thinking state
+  sendBtn.setAttribute("disabled", "true");
+  responseEl.textContent = "Organism is thinking...";
+  inputEl.value = "";
+
   try {
     const res = await fetch("/api/message", {
       method: "POST",
@@ -77,9 +82,10 @@ sendBtn.addEventListener("click", async () => {
     });
     const data = await res.json();
     responseEl.textContent = data.message;
-    inputEl.value = "";
   } catch {
     responseEl.textContent = "Failed to send message";
+  } finally {
+    sendBtn.removeAttribute("disabled");
   }
 });
 

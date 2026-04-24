@@ -19,12 +19,49 @@ pub fn web_search(query: &str) -> ExternalResult {
     }
 }
 
-/// Query an LLM (simulated for M5 — real API integration in production).
+/// Query Claude via the `claude` CLI command.
+/// Runs `claude -p "<prompt>"` and captures the output.
 pub fn llm_query(prompt: &str) -> ExternalResult {
-    ExternalResult {
-        output: format!("LLM response to: {}", prompt),
-        success: true,
-        signal_value: 0.8,
+    use std::process::Command;
+
+    // Sanitize prompt — remove shell-dangerous characters
+    let safe_prompt = prompt
+        .replace('\'', "")
+        .replace('\\', "")
+        .replace('$', "")
+        .replace('`', "");
+
+    let result = Command::new("claude")
+        .arg("-p")
+        .arg(&safe_prompt)
+        .arg("--output-format")
+        .arg("text")
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            if output.status.success() && !stdout.is_empty() {
+                ExternalResult {
+                    output: stdout.trim().to_string(),
+                    success: true,
+                    signal_value: 1.0,
+                }
+            } else {
+                ExternalResult {
+                    output: if stdout.is_empty() { stderr } else { stdout },
+                    success: false,
+                    signal_value: 0.2,
+                }
+            }
+        }
+        Err(e) => ExternalResult {
+            output: format!("Failed to run claude CLI: {}", e),
+            success: false,
+            signal_value: 0.0,
+        },
     }
 }
 

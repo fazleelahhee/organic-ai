@@ -506,6 +506,7 @@ dependencies = [
  "organic-core",
  "organic-engine",
  "organic-substrate",
+ "organic-tools",
  "serde",
  "serde_json",
  "tokio",
