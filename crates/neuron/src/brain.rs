@@ -415,8 +415,25 @@ impl OrganicBrain {
     /// This is genuine associative learning — pairing input with output
     /// and letting spike timing do the wiring.
     pub fn train(&mut self, input_text: &str, output_text: &str) {
+        // Compute surprise — how different is this from what the brain expected?
+        let predicted = self.attractor_memory.recall(input_text);
+        let surprise = crate::curiosity::compute_information_gain(
+            predicted.len() as f32 / 100.0,  // rough measure of prediction
+            output_text.len() as f32 / 100.0, // rough measure of actual
+        );
+
         // Store in attractor memory (Hebbian weight update)
-        self.attractor_memory.store(input_text, output_text);
+        // High surprise → brain learns strongly (novel information)
+        // Low surprise → brain already knew this (minimal update)
+        if surprise > 0.1 {
+            self.attractor_memory.store(input_text, output_text);
+        }
+
+        // Feed inner life — surprising inputs drive more daydreaming
+        if surprise > 0.3 {
+            self.inner_life.record_interaction(input_text);
+        }
+
         // Record in context
         self.context.add_turn(input_text, output_text);
 

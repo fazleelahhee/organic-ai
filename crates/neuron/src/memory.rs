@@ -31,15 +31,15 @@ use serde::{Deserialize, Serialize};
 const NUM_CHARS: usize = 95;
 
 /// Maximum text length.
-const MAX_TEXT_LEN: usize = 32;
+const MAX_TEXT_LEN: usize = 128;
 
 /// How many dedicated neurons per (position, character) in the memory layer.
 /// Memory layer size = MAX_TEXT_LEN * NUM_CHARS * NEURONS_PER_SLOT
-/// = 32 * 95 * 4 = 12160 neurons
-const NEURONS_PER_SLOT: usize = 4;
+/// = 128 * 95 * 2 = 24320 neurons
+const NEURONS_PER_SLOT: usize = 2;
 
 /// Memory layer size (derived).
-const MEM_SIZE: usize = MAX_TEXT_LEN * NUM_CHARS * NEURONS_PER_SLOT; // 12160
+const MEM_SIZE: usize = MAX_TEXT_LEN * NUM_CHARS * NEURONS_PER_SLOT; // 24320
 
 /// Cue layer size — sparse distributed code.
 const CUE_SIZE: usize = 16384;

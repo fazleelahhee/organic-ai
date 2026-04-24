@@ -71,7 +71,11 @@ async fn main() {
                     let _ = req.response_tx.send(response.clone());
                     println!("  → {}", source);
 
-                    world.brain.train(&req.question, &response);
+                    // Only train when Claude teaches — don't overwrite brain's own answers.
+                    // Like a human: you don't re-learn what you already know.
+                    if source == "claude" {
+                        world.brain.train(&req.question, &response);
+                    }
                     world.session_memory.record_interaction(
                         world.tick_count, &req.question,
                         if source == "brain" { 2.0 } else { 0.5 },

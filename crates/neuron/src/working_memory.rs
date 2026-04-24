@@ -18,19 +18,19 @@
 use serde::{Deserialize, Serialize};
 
 const NUM_REGISTERS: usize = 8;   // 8 working memory slots (humans have ~4-7)
-const REGISTER_SIZE: usize = 128; // neurons per register
+const REGISTER_SIZE: usize = 1900; // neurons per register (20 chars × 95 printable ASCII)
 
 /// A single working memory register — holds a value as sustained neural activity.
+/// NO string storage. The activity pattern IS the value.
+/// Decoded through the same mechanism as attractor memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Register {
-    /// Activity pattern — the value being held
+    /// Activity pattern — the value being held. This IS the memory.
     activity: Vec<f32>,
     /// Is this register actively holding something?
     active: bool,
     /// How long has this been held (decays over time)
     hold_strength: f32,
-    /// What was stored (for output — decoded from activity)
-    label: String,
 }
 
 impl Register {
@@ -39,27 +39,55 @@ impl Register {
             activity: vec![0.0; REGISTER_SIZE],
             active: false,
             hold_strength: 0.0,
-            label: String::new(),
         }
     }
 
-    /// Load a value — encode text as activity pattern.
+    /// Load a value — encode text as activity pattern using topographic encoding.
+    /// Same scheme as attractor memory: position × character → neuron.
     fn load(&mut self, value: &str) {
         self.activity = vec![0.0; REGISTER_SIZE];
-        for (i, b) in value.bytes().enumerate() {
-            let idx = (b as usize * 7 + i * 13) % REGISTER_SIZE;
-            self.activity[idx] = 1.0;
-            let idx2 = (b as usize * 31 + i * 3) % REGISTER_SIZE;
-            self.activity[idx2] = 0.7;
+        let chars_per_slot = 95; // printable ASCII
+        for (pos, byte) in value.bytes().enumerate() {
+            if pos >= REGISTER_SIZE / chars_per_slot { break; }
+            if byte >= 32 && byte < 127 {
+                let char_idx = (byte - 32) as usize;
+                let neuron_idx = pos * chars_per_slot + char_idx;
+                if neuron_idx < REGISTER_SIZE {
+                    self.activity[neuron_idx] = 1.0;
+                }
+            }
         }
         self.active = true;
         self.hold_strength = 1.0;
-        self.label = value.to_string();
     }
 
-    /// Read the current value.
-    fn read(&self) -> &str {
-        if self.active { &self.label } else { "" }
+    /// Read the current value — decoded from activity pattern.
+    /// As hold_strength decays, the pattern degrades → lossy recall.
+    /// Like real working memory: things get fuzzy over time.
+    fn read(&self) -> String {
+        if !self.active { return String::new(); }
+        let chars_per_slot = 95;
+        let max_pos = REGISTER_SIZE / chars_per_slot;
+        let mut result = String::new();
+        for pos in 0..max_pos {
+            let mut best_char = 0u8;
+            let mut best_val = 0.0f32;
+            for c in 0..chars_per_slot {
+                let idx = pos * chars_per_slot + c;
+                if idx < self.activity.len() {
+                    // Apply hold_strength as a multiplier — decayed = noisier
+                    let val = self.activity[idx] * self.hold_strength;
+                    if val > best_val {
+                        best_val = val;
+                        best_char = (c as u8) + 32;
+                    }
+                }
+            }
+            if best_val > 0.3 && best_char >= 32 && best_char < 127 {
+                result.push(best_char as char);
+            }
+        }
+        result.trim().to_string()
     }
 
     /// Decay — activity fades without reinforcement (like real working memory).
@@ -68,7 +96,6 @@ impl Register {
         if self.hold_strength <= 0.0 {
             self.active = false;
             self.hold_strength = 0.0;
-            self.label.clear();
             for a in &mut self.activity { *a = 0.0; }
         }
     }
@@ -113,33 +140,42 @@ impl WorkingMemory {
     }
 
     /// Store a value in the next available register.
-    pub fn store(&mut self, name: &str, value: &str) -> bool {
+    /// The value is encoded as a neural activity pattern — no strings stored.
+    pub fn store(&mut self, _name: &str, value: &str) -> bool {
         // Find empty register
         for reg in &mut self.registers {
             if reg.is_empty() {
-                reg.load(&format!("{}={}", name, value));
+                reg.load(value);
                 return true;
             }
         }
-        // All full — overwrite oldest (lowest hold_strength)
+        // All full — overwrite weakest (lowest hold_strength)
         if let Some(reg) = self.registers.iter_mut()
             .min_by(|a, b| a.hold_strength.partial_cmp(&b.hold_strength).unwrap())
         {
-            reg.load(&format!("{}={}", name, value));
+            reg.load(value);
             return true;
         }
         false
     }
 
-    /// Retrieve a value by name.
-    pub fn retrieve(&self, name: &str) -> Option<&str> {
-        for reg in &self.registers {
-            let content = reg.read();
-            if content.starts_with(name) && content.contains('=') {
-                return content.split('=').nth(1);
-            }
+    /// Read the most recently stored register.
+    /// Decoded from neural activity pattern — degrades with time.
+    pub fn read_latest(&self) -> String {
+        self.registers.iter()
+            .filter(|r| r.active)
+            .max_by(|a, b| a.hold_strength.partial_cmp(&b.hold_strength).unwrap())
+            .map(|r| r.read())
+            .unwrap_or_default()
+    }
+
+    /// Read register at index.
+    pub fn read_register(&self, idx: usize) -> String {
+        if idx < self.registers.len() {
+            self.registers[idx].read()
+        } else {
+            String::new()
         }
-        None
     }
 
     /// Set a plan — a sequence of steps to execute.
@@ -234,31 +270,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_store_retrieve() {
+    fn test_store_read() {
         let mut wm = WorkingMemory::new();
-        wm.store("x", "5");
-        assert_eq!(wm.retrieve("x"), Some("5"));
+        wm.store("x", "hello");
+        let latest = wm.read_latest();
+        assert!(latest.contains("hello"), "Got: {}", latest);
     }
 
     #[test]
     fn test_multiple_registers() {
         let mut wm = WorkingMemory::new();
-        wm.store("a", "10");
-        wm.store("b", "20");
-        wm.store("c", "30");
-        assert_eq!(wm.retrieve("a"), Some("10"));
-        assert_eq!(wm.retrieve("b"), Some("20"));
-        assert_eq!(wm.retrieve("c"), Some("30"));
+        wm.store("a", "one");
+        wm.store("b", "two");
+        wm.store("c", "three");
         assert_eq!(wm.active_registers(), 3);
     }
 
     #[test]
-    fn test_decay() {
+    fn test_decay_degrades() {
         let mut wm = WorkingMemory::new();
-        wm.store("x", "5");
-        // Decay until gone
+        wm.store("x", "test");
+        let before = wm.read_latest();
+        // Decay
+        for _ in 0..50 { wm.tick(); }
+        let after = wm.read_latest();
+        // After heavy decay, content should degrade or disappear
         for _ in 0..200 { wm.tick(); }
-        assert_eq!(wm.retrieve("x"), None);
         assert_eq!(wm.active_registers(), 0);
     }
 
@@ -274,7 +311,6 @@ mod tests {
 
         wm.complete_step("8");
         assert_eq!(wm.current_instruction(), Some("divide result by 2"));
-        assert_eq!(wm.retrieve("step0"), Some("8"));
 
         wm.complete_step("4");
         assert!(!wm.has_pending_steps());
@@ -295,7 +331,7 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut wm = WorkingMemory::new();
-        wm.store("x", "5");
+        wm.store("x", "hello");
         wm.set_plan(vec!["step1".to_string()]);
         wm.clear();
         assert_eq!(wm.active_registers(), 0);

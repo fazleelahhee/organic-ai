@@ -95,11 +95,13 @@ impl InnerLife {
         let chain = chain_recall(memory, &seed, 4);
 
         if chain.len() >= 2 {
-            // The brain discovered a connection!
-            // Combine first and last elements as a new insight
-            let insight = format!("{} connects to {}", chain[0], chain[chain.len() - 1]);
+            // The brain discovered a transitive connection!
+            // A → B → C means A relates to C
+            // Store the SHORTCUT — genuine new knowledge from chaining
+            let insight = chain[chain.len() - 1].clone();
 
-            // Store the insight back in memory — the brain teaches itself
+            // Store A → C directly — the brain creates new knowledge
+            // by linking distant concepts through transitive recall
             memory.store(&seed, &insight);
 
             let thought = Thought {
