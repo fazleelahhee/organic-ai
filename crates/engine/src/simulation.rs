@@ -104,6 +104,14 @@ impl World {
             }
         }
 
+        // Scatter external tool tiles (fewer — 2 each)
+        for tool_type in [ToolType::Search, ToolType::LLM, ToolType::FileSystem] {
+            for _ in 0..2 {
+                let pos = Position::new(rng.gen_range(0..config.width), rng.gen_range(0..config.height));
+                grid.set_tile_pub(pos, TileType::Tool(tool_type));
+            }
+        }
+
         Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), tool_handler: ToolHandler::new(), next_organism_id: next_id, rng }
     }
 
@@ -298,6 +306,11 @@ impl World {
                 tool_bonus += self.tool_handler.interact(tt, &inp) * 0.5;
             }
             self.organisms[i].energy += tool_bonus;
+        }
+
+        // Reset external tool safety budget every 1000 ticks
+        if self.tick_count % 1000 == 0 {
+            self.tool_handler.safety.reset();
         }
 
         self.organisms.retain(|o| o.is_alive());

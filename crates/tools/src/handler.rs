@@ -2,20 +2,29 @@ use organic_substrate::tile::ToolType;
 use crate::memory::ToolMemory;
 use crate::pattern::pattern_similarity;
 use crate::logic::{apply_logic, LogicOp};
+use crate::external;
+use crate::safety::SafetyLayer;
 
 /// Global tool state — shared across all organisms.
 pub struct ToolHandler {
     pub memory: ToolMemory,
+    pub safety: SafetyLayer,
 }
 
 impl ToolHandler {
     pub fn new() -> Self {
-        Self { memory: ToolMemory::new(100) }
+        Self {
+            memory: ToolMemory::new(100),
+            safety: SafetyLayer::new(50), // 50 external actions per reset cycle
+        }
     }
 
     /// Process a tool interaction. Takes the tool type and input signals,
     /// returns an output signal value.
     pub fn interact(&mut self, tool_type: ToolType, input: &[f32]) -> f32 {
+        if !self.safety.allow_action(tool_type) {
+            return 0.0; // denied by safety layer
+        }
         match tool_type {
             ToolType::Memory => {
                 if input.len() >= 2 {
@@ -64,6 +73,21 @@ impl ToolHandler {
                 if input.is_empty() { return 0.0; }
                 let sum: f32 = input.iter().sum();
                 (sum / input.len() as f32).clamp(0.0, 1.0)
+            }
+            ToolType::Search => {
+                let query = external::signals_to_query(input);
+                let result = external::web_search(&query);
+                result.signal_value
+            }
+            ToolType::LLM => {
+                let prompt = external::signals_to_query(input);
+                let result = external::llm_query(&prompt);
+                result.signal_value
+            }
+            ToolType::FileSystem => {
+                let filename = external::signals_to_query(input);
+                let result = external::read_file(&filename);
+                result.signal_value
             }
         }
     }

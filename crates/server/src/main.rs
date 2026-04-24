@@ -1,4 +1,5 @@
 mod snapshot;
+mod user_input;
 mod websocket;
 
 use axum::{routing::get, Router};
@@ -38,10 +39,14 @@ async fn main() {
         }
     });
 
+    let message_queue = user_input::MessageQueue::default();
+
     let app = Router::new()
         .route("/ws", get(websocket::ws_handler))
+        .route("/api/message", axum::routing::post(user_input::send_message))
         .nest_service("/", ServeDir::new("web"))
         .layer(CorsLayer::permissive())
+        .layer(axum::Extension(message_queue))
         .with_state(snapshot_rx);
 
     let addr = "0.0.0.0:3000";
