@@ -41,9 +41,17 @@ export class Renderer {
 
     for (const org of snapshot.organisms) {
       for (const cell of org.cells) {
-        const color = CELL_TYPE_COLORS[cell.cell_type] || "#FFFFFF";
+        let color = CELL_TYPE_COLORS[cell.cell_type] || "#FFFFFF";
+        if (cell.spike_active) {
+          color = "#FFFFFF";
+        }
         ctx.fillStyle = color;
         ctx.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize - 1, cellSize - 1);
+
+        if (cell.information_gain > 0.3) {
+          ctx.fillStyle = `rgba(255, 255, 0, ${cell.information_gain * 0.3})`;
+          ctx.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize - 1, cellSize - 1);
+        }
       }
 
       if (org.cells.length > 1) {
