@@ -31,10 +31,10 @@ pub struct InnerLife {
     /// Thoughts the brain has had on its own
     pub thoughts: Vec<Thought>,
     max_thoughts: usize,
-    /// How often to think (every N ticks)
-    pub think_interval: u64,
     /// Curiosity level — high when not enough new input
     boredom: f32,
+    /// Is the brain currently busy processing a query?
+    busy: bool,
     /// Counter for tracking
     pub total_thoughts: u64,
 }
@@ -46,14 +46,19 @@ impl InnerLife {
             max_recent: 50,
             thoughts: Vec::new(),
             max_thoughts: 100,
-            think_interval: 500,
             boredom: 0.0,
+            busy: false,
             total_thoughts: 0,
         }
     }
 
+    /// The brain is now busy (processing a query).
+    pub fn set_busy(&mut self) { self.busy = true; }
+
+    /// The brain is now free.
+    pub fn set_free(&mut self) { self.busy = false; }
+
     /// Record that someone asked the brain something.
-    /// This feeds the daydreaming pool and reduces boredom.
     pub fn record_interaction(&mut self, cue: &str) {
         self.recent_cues.push(cue.to_string());
         if self.recent_cues.len() > self.max_recent {
@@ -70,8 +75,10 @@ impl InnerLife {
     }
 
     /// Should the brain think right now?
-    pub fn should_think(&self, tick: u64) -> bool {
-        tick % self.think_interval == 0 && !self.recent_cues.is_empty()
+    /// YES when: not busy AND bored enough AND has something to think about.
+    /// NO fixed timer. The brain decides based on its own state.
+    pub fn should_think(&self) -> bool {
+        !self.busy && self.boredom > 0.3 && !self.recent_cues.is_empty()
     }
 
     /// The brain thinks for itself.
@@ -187,11 +194,19 @@ mod tests {
     }
 
     #[test]
-    fn test_should_think_timing() {
+    fn test_should_think_when_bored_and_free() {
         let mut il = InnerLife::new();
         il.record_interaction("test");
-        assert!(il.should_think(500));
-        assert!(!il.should_think(501));
-        assert!(il.should_think(1000));
+        // Not bored yet
+        assert!(!il.should_think());
+        // Get bored
+        for _ in 0..500 { il.tick_boredom(); }
+        assert!(il.should_think());
+        // Now busy
+        il.set_busy();
+        assert!(!il.should_think());
+        // Free again
+        il.set_free();
+        assert!(il.should_think());
     }
 }

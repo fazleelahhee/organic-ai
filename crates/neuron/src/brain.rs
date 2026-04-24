@@ -326,6 +326,7 @@ impl OrganicBrain {
     /// This may be nonsense early on, improving with training.
     pub fn process(&mut self, query: &str) -> String {
         self.total_queries += 1;
+        self.inner_life.set_busy();
         self.inner_life.record_interaction(query);
 
         // The brain THINKS — not just recalls.
@@ -340,12 +341,13 @@ impl OrganicBrain {
         );
 
         if !response.is_empty() {
-            // Record this turn in context
             self.context.add_turn(query, &response);
+            self.inner_life.set_free();
             return response;
         }
 
         // Nothing — brain doesn't know yet
+        self.inner_life.set_free();
         String::new()
     }
 
@@ -380,9 +382,11 @@ impl OrganicBrain {
 
     /// Let the brain think for itself — called periodically by the simulation.
     /// Returns a thought if the brain discovered something new.
+    /// Let the brain think for itself — when it's free and bored.
+    /// No fixed timer. The brain decides based on its own curiosity state.
     pub fn tick_inner_life(&mut self, tick: u64) -> Option<crate::inner_life::Thought> {
         self.inner_life.tick_boredom();
-        if self.inner_life.should_think(tick) {
+        if self.inner_life.should_think() {
             self.inner_life.daydream(&mut self.attractor_memory, tick)
         } else {
             None
