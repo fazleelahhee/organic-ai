@@ -332,12 +332,68 @@ impl OrganicBrain {
         self.inner_life.set_busy();
         self.inner_life.record_interaction(query);
 
-        // The brain THINKS — not just recalls.
-        // 1. Checks context (what were we talking about?)
-        // 2. Tries direct recall from Hebbian weights
-        // 3. Tries reasoning (chain recalls)
-        // 4. Tries creative blend (noise + pattern overlap)
-        let (response, source) = crate::thinking::think(
+        // STEP 1: Check if there's an active plan — continue executing it
+        if self.working_memory.has_pending_steps() {
+            if let Some(instruction) = self.working_memory.current_instruction() {
+                let step_query = instruction.to_string();
+                // Execute this step using recall
+                let step_result = self.attractor_memory.recall(&step_query);
+                let result = if !step_result.trim().is_empty() {
+                    step_result
+                } else {
+                    // Can't execute step internally — return the instruction
+                    // so Claude can teach it
+                    self.inner_life.set_free();
+                    return String::new();
+                };
+                self.working_memory.complete_step(&result);
+                // If plan is done, return final result
+                if !self.working_memory.has_pending_steps() {
+                    if let Some(final_result) = self.working_memory.final_result() {
+                        let response = final_result.to_string();
+                        self.context.add_turn(query, &response);
+                        self.inner_life.set_free();
+                        return response;
+                    }
+                }
+                // Plan still in progress — return intermediate state
+                let state = self.working_memory.state_summary();
+                self.inner_life.set_free();
+                return format!("thinking... {}", state);
+            }
+        }
+
+        // STEP 2: Try multi-step reasoning — chain recall.
+        // If chain produces 2+ hops, use working memory to execute them.
+        // No keyword matching — the brain discovers structure from its own weights.
+        {
+            let chain = crate::thinking::chain_recall(&self.attractor_memory, query, 5);
+            if chain.len() >= 2 {
+                // Store chain as a plan
+                self.working_memory.clear();
+                self.working_memory.set_plan(chain.clone());
+                // Store the query in register for reference
+                self.working_memory.store("query", query);
+                // Execute first step
+                if let Some(instruction) = self.working_memory.current_instruction() {
+                    let step_result = self.attractor_memory.recall(instruction);
+                    if !step_result.trim().is_empty() {
+                        self.working_memory.complete_step(&step_result);
+                    }
+                }
+                // Return what we have so far
+                let results = self.working_memory.plan_results();
+                if !results.is_empty() {
+                    let response = results.join(". ");
+                    self.context.add_turn(query, &response);
+                    self.inner_life.set_free();
+                    return response;
+                }
+            }
+        }
+
+        // STEP 3: Standard thinking — context, recall, reasoning, creativity
+        let (response, _source) = crate::thinking::think(
             &self.attractor_memory,
             &self.context,
             query,
