@@ -143,31 +143,30 @@ impl World {
                     }
                 }
                 LifecyclePhase::Living => {
-                    // Motor cells move organism toward resources
-                    let has_motor = org.cells.iter().any(|c| c.cell_type == CellType::Motor);
-                    if has_motor {
-                        let sensor_positions: Vec<Position> = org.cells.iter()
-                            .filter(|c| c.cell_type == CellType::Sensor)
-                            .map(|c| c.position).collect();
+                    // Run the 6-step neural cycle
+                    let neural_result = crate::neural_tick::run_neural_tick(
+                        &mut org.cells,
+                        self.tick_count,
+                        &org.genome.learning_params,
+                        &self.grid,
+                    );
 
-                        let move_dir = if !sensor_positions.is_empty() {
-                            let sample_pos = sensor_positions[0];
-                            let mut best_dir = Direction::random(&mut self.rng);
-                            let mut best_density = 0.0f32;
-                            for dir in Direction::all() {
-                                let check_pos = sample_pos.neighbor(dir);
-                                let local = self.grid.sense(check_pos);
-                                if local.resource_density > best_density {
-                                    best_density = local.resource_density;
-                                    best_dir = dir;
-                                }
+                    // Apply movement from neural output
+                    if let Some(move_dir) = neural_result.move_direction {
+                        let new_positions: Vec<Position> = org.cells.iter()
+                            .map(|c| c.position.neighbor(move_dir)).collect();
+                        let all_walkable = new_positions.iter().all(|p| self.grid.is_walkable(*p));
+                        if all_walkable {
+                            for (cell, new_pos) in org.cells.iter_mut().zip(new_positions) {
+                                cell.position = new_pos;
                             }
-                            if self.rng.gen::<f32>() < 0.3 { Direction::random(&mut self.rng) } else { best_dir }
-                        } else {
-                            Direction::random(&mut self.rng)
-                        };
-
-                        let new_positions: Vec<Position> = org.cells.iter().map(|c| c.position.neighbor(move_dir)).collect();
+                            org.energy -= energy::COST_MOVE;
+                        }
+                    } else {
+                        // Random movement fallback when neurons don't produce a direction
+                        let move_dir = Direction::random(&mut self.rng);
+                        let new_positions: Vec<Position> = org.cells.iter()
+                            .map(|c| c.position.neighbor(move_dir)).collect();
                         let all_walkable = new_positions.iter().all(|p| self.grid.is_walkable(*p));
                         if all_walkable {
                             for (cell, new_pos) in org.cells.iter_mut().zip(new_positions) {
@@ -186,7 +185,12 @@ impl World {
                         }
                     }
 
-                    org.energy -= energy::COST_SENSING * org.cells.iter().filter(|c| c.cell_type == CellType::Sensor).count() as f32;
+                    // Spike energy cost
+                    org.energy -= neural_result.energy_cost;
+
+                    // Sensing cost
+                    org.energy -= energy::COST_SENSING
+                        * org.cells.iter().filter(|c| c.cell_type == CellType::Sensor).count() as f32;
                 }
                 LifecyclePhase::Dead => {}
             }
