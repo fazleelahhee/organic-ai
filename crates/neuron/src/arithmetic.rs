@@ -250,40 +250,27 @@ enum Token {
     RParen,
 }
 
-/// Perception layer — tokenize mathematical expressions from natural language.
-/// Converts "what is 2 plus 3 times 4?" into [Num(2), Op(+), Num(3), Op(*), Num(4)]
+/// Tokenize raw math expressions — no natural language translation.
+/// Only understands: digits, decimal points, operators (+−*/^%), parentheses.
+/// "what is 5 plus 3" → None (not raw math, goes to cortex/Claude)
+/// "5+3" → [Num(5), Op(+), Num(3)]
 fn tokenize_expression(text: &str) -> Option<Vec<Token>> {
-    // Normalize natural language to operators
-    let text = text.to_lowercase()
-        .replace("what is", "")
-        .replace("what's", "")
-        .replace("how much is", "")
-        .replace("calculate", "")
-        .replace("compute", "")
-        .replace("solve", "")
-        .replace("equals", "")
-        .replace("equal", "")
-        .replace("plus", "+")
-        .replace("minus", "-")
-        .replace("times", "*")
-        .replace("multiplied by", "*")
-        .replace("divided by", "/")
-        .replace("over", "/")
-        .replace("mod ", "% ")
-        .replace("modulo ", "% ")
-        .replace("to the power of", "^")
-        .replace("power", "^")
-        .replace("squared", "^2")
-        .replace("cubed", "^3")
-        .replace('?', "")
-        .replace('=', "");
+    let text = text.trim();
+
+    // Quick check: must contain at least one digit AND one operator to be math.
+    // If it's mostly letters, it's natural language — not our job.
+    let digit_count = text.chars().filter(|c| c.is_ascii_digit()).count();
+    let letter_count = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    if digit_count == 0 || letter_count > digit_count {
+        return None; // more words than numbers — natural language, not math
+    }
 
     let mut tokens = Vec::new();
-    let mut chars = text.trim().chars().peekable();
+    let mut chars = text.chars().peekable();
 
     while let Some(&ch) = chars.peek() {
         match ch {
-            ' ' => { chars.next(); }
+            ' ' | '?' | '=' | ',' => { chars.next(); }
             '0'..='9' | '.' => {
                 let mut num_str = String::new();
                 while let Some(&c) = chars.peek() {
@@ -303,17 +290,16 @@ fn tokenize_expression(text: &str) -> Option<Vec<Token>> {
             }
             '(' => { tokens.push(Token::LParen); chars.next(); }
             ')' => { tokens.push(Token::RParen); chars.next(); }
-            'x' => {
-                // 'x' as multiplication between numbers
-                tokens.push(Token::Op('*'));
-                chars.next();
-            }
-            _ => { chars.next(); } // skip unknown
+            _ => { chars.next(); } // skip unknown chars
         }
     }
 
-    // Need at least one number to be math
-    if tokens.iter().any(|t| matches!(t, Token::Num(_))) {
+    // Must have at least one number and one operator to be a math expression
+    let has_num = tokens.iter().any(|t| matches!(t, Token::Num(_)));
+    let has_op = tokens.iter().any(|t| matches!(t, Token::Op(_)))
+        || tokens.iter().filter(|t| matches!(t, Token::Num(_))).count() == 1; // single number is valid
+
+    if has_num && tokens.len() >= 1 {
         Some(tokens)
     } else {
         None
@@ -339,9 +325,9 @@ mod tests {
     #[test] fn test_chain_mul() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("10*10*10"), Some("1000".into())); }
     #[test] fn test_mixed() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("100/5+3"), Some("23".into())); }
 
-    // Natural language
-    #[test] fn test_nl_add() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("what is 15 plus 27?"), Some("42".into())); }
-    #[test] fn test_nl_mul() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("12 times 8"), Some("96".into())); }
+    // Natural language → None (goes to cortex/Claude, not hardcoded)
+    #[test] fn test_nl_rejected() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("what is fifteen plus twenty seven"), None); }
+    #[test] fn test_words_rejected() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("twelve times eight"), None); }
 
     // Edge cases
     #[test] fn test_negative() { let mut a = NeuralArithmetic::new(); assert_eq!(a.try_compute("3-7"), Some("-4".into())); }
