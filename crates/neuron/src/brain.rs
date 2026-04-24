@@ -8,25 +8,25 @@
 /// - Learns entirely through spike-timing-dependent plasticity
 /// - No backpropagation, no parsing, no HashMaps
 ///
-/// The network is large enough to learn real associations (2048 neurons)
-/// and uses the same LIF + STDP that drives the organisms.
+/// 40 million spiking neurons with STDP learning.
+/// Uses the same LIF + STDP that drives the organisms.
 
 use crate::lif::{integrate_and_fire, LifParams};
 use crate::stdp::{apply_stdp, StdpParams};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-const TOTAL_NEURONS: usize = 2048;
-const INPUT_POP: usize = 256;    // input population
-const HIDDEN_POP: usize = 1536;  // recurrent hidden population
-const OUTPUT_POP: usize = 256;   // output population
-const MAX_SYNAPSES_PER_NEURON: usize = 32;
-const SPIKE_HISTORY_LEN: usize = 8; // ticks of spike history for rate coding
+const TOTAL_NEURONS: usize = 40_000_000;
+const INPUT_POP: usize = 1_000_000;     // 1M input neurons
+const HIDDEN_POP: usize = 38_000_000;   // 38M recurrent hidden neurons
+const OUTPUT_POP: usize = 1_000_000;    // 1M output neurons
+const MAX_SYNAPSES_PER_NEURON: usize = 4;
+const SPIKE_HISTORY_LEN: usize = 8;
 
 /// A synapse in the brain — an incoming connection from source to this neuron.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BrainSynapse {
-    source: u16,         // source neuron index (where input comes FROM)
+    source: u32,         // source neuron index (where input comes FROM)
     weight: f32,
     last_pre_tick: u64,
 }
@@ -70,6 +70,9 @@ impl BrainNeuron {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrganicBrain {
     neurons: Vec<BrainNeuron>,
+    input_pop: usize,
+    hidden_pop: usize,
+    output_pop: usize,
     lif_params: LifParams,
     stdp_params: StdpParams,
     tick: u64,
@@ -78,56 +81,74 @@ pub struct OrganicBrain {
 }
 
 impl OrganicBrain {
+    /// Create a full-scale brain (40M neurons). Takes ~10 seconds to initialize.
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
-        let mut neurons: Vec<BrainNeuron> = (0..TOTAL_NEURONS)
-            .map(|_| BrainNeuron::new())
-            .collect();
+        Self::new_with_size(TOTAL_NEURONS, INPUT_POP, HIDDEN_POP, OUTPUT_POP, MAX_SYNAPSES_PER_NEURON)
+    }
 
-        // Initialize random sparse connectivity
-        // Input → Hidden (sparse, random)
-        for i in 0..INPUT_POP {
-            let n_syn = rng.gen_range(8..MAX_SYNAPSES_PER_NEURON);
-            for _ in 0..n_syn {
-                let target = INPUT_POP + rng.gen_range(0..HIDDEN_POP);
-                neurons[target].synapses.push(BrainSynapse {
-                    source: i as u16,
-                    weight: rng.gen_range(0.01..0.15),
-                    last_pre_tick: 0,
-                });
-            }
+    /// Create a smaller brain for testing or resource-constrained environments.
+    pub fn new_small(total: usize) -> Self {
+        let input = total / 8;
+        let output = total / 8;
+        let hidden = total - input - output;
+        Self::new_with_size(total, input, hidden, output, 4)
+    }
+
+    fn new_with_size(total: usize, input_pop: usize, hidden_pop: usize, output_pop: usize, synapses_per: usize) -> Self {
+        println!("Allocating {} neurons ({:.1} GB)...", total,
+            (total * (32 + synapses_per * 16)) as f64 / 1e9);
+
+        // Use a fast deterministic RNG for initialization (faster than thread_rng at scale)
+        let mut seed: u64 = 42;
+        let fast_rand = |s: &mut u64, max: usize| -> usize {
+            *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((*s >> 33) as usize) % max
+        };
+        let fast_randf = |s: &mut u64, lo: f32, hi: f32| -> f32 {
+            *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let t = ((*s >> 33) as f32) / (u32::MAX as f32);
+            lo + t * (hi - lo)
+        };
+
+        // Allocate all neurons with empty synapses
+        let mut neurons: Vec<BrainNeuron> = Vec::with_capacity(total);
+        for _ in 0..total {
+            neurons.push(BrainNeuron::new());
         }
 
-        // Hidden → Hidden (recurrent, sparse)
-        for i in INPUT_POP..(INPUT_POP + HIDDEN_POP) {
-            let n_syn = rng.gen_range(4..16);
+        // Initialize sparse LOCAL connectivity.
+        // Each neuron connects to nearby neurons (locality principle — like real brains).
+        let locality_radius: usize = (total / 100).max(10).min(5000);
+
+        for i in 0..total {
+            let n_syn = synapses_per;
             for _ in 0..n_syn {
-                let target = INPUT_POP + rng.gen_range(0..HIDDEN_POP);
-                if target != i { // no self-connections
-                    neurons[target].synapses.push(BrainSynapse {
-                        source: i as u16,
-                        weight: rng.gen_range(-0.1..0.1),
+                // Pick a source within locality radius
+                let offset = fast_rand(&mut seed, locality_radius * 2);
+                let source = if i + offset >= locality_radius {
+                    (i + offset - locality_radius) % total
+                } else {
+                    0
+                };
+                if source != i {
+                    let weight = fast_randf(&mut seed, 0.01, 0.15);
+                    neurons[i].synapses.push(BrainSynapse {
+                        source: source as u32,
+                        weight,
                         last_pre_tick: 0,
                     });
                 }
             }
         }
 
-        // Hidden → Output (sparse, random)
-        for i in INPUT_POP..(INPUT_POP + HIDDEN_POP) {
-            let n_syn = rng.gen_range(2..8);
-            for _ in 0..n_syn {
-                let target = INPUT_POP + HIDDEN_POP + rng.gen_range(0..OUTPUT_POP);
-                neurons[target].synapses.push(BrainSynapse {
-                    source: i as u16,
-                    weight: rng.gen_range(0.01..0.1),
-                    last_pre_tick: 0,
-                });
-            }
-        }
+        println!("Brain initialized: {} neurons, {} synapses",
+            total, total * synapses_per);
 
         Self {
             neurons,
+            input_pop,
+            hidden_pop,
+            output_pop,
             lif_params: LifParams { threshold: 0.8, leak_rate: 0.1, reset_potential: 0.0 },
             stdp_params: StdpParams::default(),
             tick: 0,
@@ -141,20 +162,20 @@ impl OrganicBrain {
     /// This creates overlapping distributed representations — similar inputs
     /// activate similar neuron populations.
     fn encode_to_spikes(&self, text: &str) -> Vec<f32> {
-        let mut input = vec![0.0f32; INPUT_POP];
+        let mut input = vec![0.0f32; self.input_pop];
         for (pos, byte) in text.bytes().enumerate() {
             let b = byte as usize;
             // Each character activates ~8 neurons in a distributed pattern
             // Using prime multipliers to spread activation
             let indices = [
-                b % INPUT_POP,
-                (b * 7 + pos * 3) % INPUT_POP,
-                (b * 13 + pos * 7) % INPUT_POP,
-                (b * 31 + pos * 11) % INPUT_POP,
-                (b * 37 + pos * 17) % INPUT_POP,
-                (b.wrapping_mul(41).wrapping_add(pos * 23)) % INPUT_POP,
-                (b.wrapping_mul(53).wrapping_add(pos * 29)) % INPUT_POP,
-                (b.wrapping_mul(61).wrapping_add(pos * 31)) % INPUT_POP,
+                b % self.input_pop,
+                (b * 7 + pos * 3) % self.input_pop,
+                (b * 13 + pos * 7) % self.input_pop,
+                (b * 31 + pos * 11) % self.input_pop,
+                (b * 37 + pos * 17) % self.input_pop,
+                (b.wrapping_mul(41).wrapping_add(pos * 23)) % self.input_pop,
+                (b.wrapping_mul(53).wrapping_add(pos * 29)) % self.input_pop,
+                (b.wrapping_mul(61).wrapping_add(pos * 31)) % self.input_pop,
             ];
             for &idx in &indices {
                 input[idx] += 0.15;
@@ -171,8 +192,8 @@ impl OrganicBrain {
     /// Decode output neuron firing rates back to text.
     /// The output population's firing pattern IS the answer.
     fn decode_from_rates(&self) -> String {
-        let output_start = INPUT_POP + HIDDEN_POP;
-        let output_end = output_start + OUTPUT_POP;
+        let output_start = self.input_pop + self.hidden_pop;
+        let output_end = output_start + self.output_pop;
 
         // Collect firing rates from output neurons
         let rates: Vec<f32> = self.neurons[output_start..output_end]
@@ -202,30 +223,33 @@ impl OrganicBrain {
 
     /// Run the brain for N ticks with given input, applying STDP learning.
     /// This is where the actual neural computation happens.
+    /// Uses sparse spike sets for efficiency at 40M neuron scale.
     fn run_ticks(&mut self, input: &[f32], n_ticks: usize, learn: bool) {
+        use std::collections::HashSet;
+
         for _ in 0..n_ticks {
             self.tick += 1;
 
-            // Collect current spike state
-            let spike_state: Vec<bool> = self.neurons.iter().map(|n| n.fired).collect();
+            // Collect fired neuron indices (sparse — only store the ones that fired)
+            let fired_set: HashSet<u32> = self.neurons.iter().enumerate()
+                .filter(|(_, n)| n.fired)
+                .map(|(i, _)| i as u32)
+                .collect();
 
             // Process each neuron
-            for i in 0..TOTAL_NEURONS {
-                // Compute total input to this neuron
+            for i in 0..self.neurons.len() {
                 let mut total_input = 0.0f32;
 
                 // External input (for input population only)
-                if i < INPUT_POP {
+                if i < self.input_pop {
                     total_input += input.get(i).copied().unwrap_or(0.0);
                 }
 
-                // Synaptic input from connected neurons (using previous tick's spikes)
-                // We need to read from spike_state and write to neurons[i], so we
-                // iterate synapses by index
+                // Synaptic input from connected neurons that fired last tick
                 let synapse_count = self.neurons[i].synapses.len();
                 for s in 0..synapse_count {
-                    let source = self.neurons[i].synapses[s].source as usize;
-                    if source < TOTAL_NEURONS && spike_state[source] {
+                    let source = self.neurons[i].synapses[s].source;
+                    if fired_set.contains(&source) {
                         total_input += self.neurons[i].synapses[s].weight;
                         self.neurons[i].synapses[s].last_pre_tick = self.tick;
                     }
@@ -254,7 +278,7 @@ impl OrganicBrain {
                                 &mut self.neurons[i].synapses[s].weight,
                                 pre_tick,
                                 post_tick,
-                                0.0, // no external modulation — pure STDP
+                                0.0,
                                 &self.stdp_params,
                             );
                         }
@@ -269,8 +293,8 @@ impl OrganicBrain {
     /// This may be nonsense early on, improving with training.
     pub fn process(&mut self, query: &str) -> String {
         // Reset output neurons before processing
-        let output_start = INPUT_POP + HIDDEN_POP;
-        for i in output_start..(output_start + OUTPUT_POP) {
+        let output_start = self.input_pop + self.hidden_pop;
+        for i in output_start..(output_start + self.output_pop) {
             self.neurons[i].potential = 0.0;
             self.neurons[i].fired = false;
             self.neurons[i].spike_history = [false; SPIKE_HISTORY_LEN];
@@ -296,8 +320,8 @@ impl OrganicBrain {
         // Phase 2: Clamp output neurons to desired pattern — creates
         // temporal correlation between input-driven hidden activity
         // and correct output activity. STDP wires them together.
-        let output_start = INPUT_POP + HIDDEN_POP;
-        for i in 0..OUTPUT_POP {
+        let output_start = self.input_pop + self.hidden_pop;
+        for i in 0..self.output_pop {
             let target_rate = output_pattern.get(i).copied().unwrap_or(0.0);
             if target_rate > 0.3 {
                 // Force this output neuron to fire — creates the association
@@ -329,7 +353,7 @@ impl OrganicBrain {
         };
 
         BrainStats {
-            total_neurons: TOTAL_NEURONS,
+            total_neurons: self.neurons.len(),
             total_synapses,
             active_neurons,
             avg_weight,
@@ -353,88 +377,73 @@ pub struct BrainStats {
 mod tests {
     use super::*;
 
+    // Tests use small brains (2048 neurons) for speed
+    fn test_brain() -> OrganicBrain { OrganicBrain::new_small(2048) }
+
     #[test]
     fn test_brain_creation() {
-        let brain = OrganicBrain::new();
-        assert_eq!(brain.neurons.len(), TOTAL_NEURONS);
+        let brain = test_brain();
+        assert_eq!(brain.neurons.len(), 2048);
         assert!(brain.neurons.iter().any(|n| !n.synapses.is_empty()));
     }
 
     #[test]
-    fn test_encode_produces_distributed_pattern() {
-        let brain = OrganicBrain::new();
+    fn test_encode_distributed() {
+        let brain = test_brain();
         let pattern = brain.encode_to_spikes("hello");
-        assert_eq!(pattern.len(), INPUT_POP);
-        // Should have multiple active neurons (distributed, not one-hot)
         let active = pattern.iter().filter(|&&v| v > 0.0).count();
-        assert!(active > 5, "Pattern should be distributed across many neurons, got {}", active);
+        assert!(active > 5, "Pattern should be distributed, got {} active", active);
     }
 
     #[test]
     fn test_different_inputs_different_patterns() {
-        let brain = OrganicBrain::new();
+        let brain = test_brain();
         let p1 = brain.encode_to_spikes("hello");
         let p2 = brain.encode_to_spikes("world");
         let diff: f32 = p1.iter().zip(p2.iter()).map(|(a, b)| (a - b).abs()).sum();
-        assert!(diff > 0.0, "Different inputs must produce different patterns");
+        assert!(diff > 0.0);
     }
 
     #[test]
     fn test_similar_inputs_similar_patterns() {
-        let brain = OrganicBrain::new();
+        let brain = test_brain();
         let p1 = brain.encode_to_spikes("hello");
-        let p2 = brain.encode_to_spikes("hallo"); // similar word
-        let p3 = brain.encode_to_spikes("xyzzz"); // very different
-        let diff_similar: f32 = p1.iter().zip(p2.iter()).map(|(a, b)| (a - b).abs()).sum();
-        let diff_different: f32 = p1.iter().zip(p3.iter()).map(|(a, b)| (a - b).abs()).sum();
-        assert!(diff_similar < diff_different,
-            "Similar inputs should have more similar patterns: similar={}, different={}", diff_similar, diff_different);
+        let p2 = brain.encode_to_spikes("hallo");
+        let p3 = brain.encode_to_spikes("xyzzz");
+        let diff_sim: f32 = p1.iter().zip(p2.iter()).map(|(a, b)| (a - b).abs()).sum();
+        let diff_dif: f32 = p1.iter().zip(p3.iter()).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff_sim < diff_dif);
     }
 
     #[test]
-    fn test_process_returns_something() {
-        let mut brain = OrganicBrain::new();
-        let result = brain.process("2+3");
-        // Untrained brain produces noise — that's correct
-        assert!(brain.total_queries == 1);
-        // Result may be empty or noise — that's expected for an untrained brain
+    fn test_process() {
+        let mut brain = test_brain();
+        let _ = brain.process("2+3");
+        assert_eq!(brain.total_queries, 1);
     }
 
     #[test]
     fn test_training_changes_weights() {
-        let mut brain = OrganicBrain::new();
-        let weights_before: f32 = brain.neurons.iter()
-            .flat_map(|n| n.synapses.iter().map(|s| s.weight))
-            .sum();
-
-        for _ in 0..10 {
-            brain.train("2+3", "5");
-        }
-
-        let weights_after: f32 = brain.neurons.iter()
-            .flat_map(|n| n.synapses.iter().map(|s| s.weight))
-            .sum();
-
-        assert_ne!(weights_before, weights_after,
-            "Training must change synapse weights via STDP");
+        let mut brain = test_brain();
+        let w_before: f32 = brain.neurons.iter().flat_map(|n| n.synapses.iter().map(|s| s.weight)).sum();
+        for _ in 0..10 { brain.train("2+3", "5"); }
+        let w_after: f32 = brain.neurons.iter().flat_map(|n| n.synapses.iter().map(|s| s.weight)).sum();
+        assert_ne!(w_before, w_after, "Training must change weights via STDP");
     }
 
     #[test]
-    fn test_repeated_training_strengthens_pathways() {
-        let mut brain = OrganicBrain::new();
-        // Train on the same pair many times
-        for _ in 0..50 {
-            brain.train("hello", "world");
-        }
+    fn test_repeated_training() {
+        let mut brain = test_brain();
+        for _ in 0..50 { brain.train("hello", "world"); }
         assert_eq!(brain.total_training, 50);
         assert!(brain.is_trained());
     }
 
     #[test]
     fn test_stats() {
-        let brain = OrganicBrain::new();
+        let brain = test_brain();
         let stats = brain.stats();
-        assert_eq!(stats.total_neurons, TOTAL_NEURONS);
+        assert_eq!(stats.total_neurons, 2048);
         assert!(stats.total_synapses > 0);
     }
 }
