@@ -8,6 +8,13 @@ const CELL_TYPE_COLORS: Record<string, string> = {
   Undifferentiated: "#9E9E9E",
 };
 
+const TOOL_COLORS: Record<string, string> = {
+  Memory: "#E040FB",    // purple
+  Pattern: "#00BCD4",   // cyan
+  Logic: "#FF5722",     // deep orange
+  Language: "#CDDC39",  // lime
+};
+
 const BG_COLOR = "#1a1a2e";
 
 export class Renderer {
@@ -38,6 +45,16 @@ export class Renderer {
 
     ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, w, h);
+
+    // Draw tool tiles
+    if (snapshot.tool_positions) {
+      for (const tool of snapshot.tool_positions) {
+        ctx.fillStyle = TOOL_COLORS[tool.tool_type] || "#888";
+        ctx.globalAlpha = 0.4;
+        ctx.fillRect(tool.x * cellSize, tool.y * cellSize, cellSize, cellSize);
+        ctx.globalAlpha = 1.0;
+      }
+    }
 
     for (const org of snapshot.organisms) {
       for (const cell of org.cells) {

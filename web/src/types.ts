@@ -1,3 +1,9 @@
+export interface ToolTileSnapshot {
+  x: number;
+  y: number;
+  tool_type: string;
+}
+
 export interface WorldSnapshot {
   tick: number;
   grid_width: number;
@@ -8,6 +14,7 @@ export interface WorldSnapshot {
   archive_coverage: number;
   archive_capacity: number;
   max_generation: number;
+  tool_positions: ToolTileSnapshot[];
 }
 
 export interface OrganismSnapshot {
