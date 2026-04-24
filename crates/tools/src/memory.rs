@@ -15,7 +15,7 @@ impl ToolMemory {
 
     /// Store a pattern at an address. Returns true if stored.
     pub fn store(&mut self, address: f32, pattern: Vec<f32>) -> bool {
-        let key = (address * 100.0) as u32;
+        let key = (address * 1000000.0) as u32;
         if self.storage.len() >= self.max_entries && !self.storage.contains_key(&key) {
             return false;
         }
@@ -25,7 +25,7 @@ impl ToolMemory {
 
     /// Retrieve a pattern by address. Returns empty vec if not found.
     pub fn retrieve(&self, address: f32) -> Vec<f32> {
-        let key = (address * 100.0) as u32;
+        let key = (address * 1000000.0) as u32;
         self.storage.get(&key).cloned().unwrap_or_default()
     }
 

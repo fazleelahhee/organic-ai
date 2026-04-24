@@ -55,47 +55,49 @@ async fn main() {
 
                 for req in requests {
                     println!("Processing question: {}", req.question);
-
-                    // Step 1: Check organism's memory — has it seen this before?
                     let memory_key = req.question.to_lowercase().trim().to_string();
-                    let remembered = world.tool_handler.memory.retrieve(
-                        string_to_address(&memory_key)
-                    );
 
-                    let (response, source) = if !remembered.is_empty() {
-                        // Organism remembers! Convert stored signals back to text
-                        let text = signals_to_text(&remembered);
-                        if !text.is_empty() {
-                            (text, "memory")
-                        } else {
-                            // Memory corrupted, fall through to Claude
-                            let result = organic_tools::external::llm_query(&req.question);
-                            let answer = if result.success { result.output.clone() } else { "I don't know yet.".to_string() };
-                            // Learn: store in memory for next time
-                            let signals = text_to_store_signals(&answer);
-                            world.tool_handler.memory.store(string_to_address(&memory_key), signals);
-                            (answer, "claude (re-learned)")
-                        }
+                    // LAYER 1: Try cortex (genuine neural learning)
+                    let cortex_answer = world.cortex.try_answer(&req.question);
+
+                    let (response, source) = if let Some(answer) = cortex_answer {
+                        (answer, "cortex (learned)")
+
                     } else {
-                        // Not in memory — ask Claude (use it as a tool)
-                        let result = organic_tools::external::llm_query(&req.question);
-                        let answer = if result.success { result.output.clone() } else { "I don't know yet.".to_string() };
+                        // LAYER 2: Check organism's memory
+                        let remembered = world.tool_handler.memory.retrieve(
+                            string_to_address(&memory_key)
+                        );
 
-                        // LEARN: store the answer in organism's memory
-                        let signals = text_to_store_signals(&answer);
-                        world.tool_handler.memory.store(string_to_address(&memory_key), signals);
-                        println!("  → Learned and stored in memory");
-
-                        (answer, "claude (first time)")
+                        if !remembered.is_empty() {
+                            let text = signals_to_text(&remembered);
+                            if !text.is_empty() {
+                                // Teach cortex from memory too (reinforcement)
+                                world.cortex.learn(&req.question, &text);
+                                (text, "memory")
+                            } else {
+                                // Memory corrupted — fall to Claude
+                                let answer = ask_claude_and_learn(&req.question, &memory_key, &mut world);
+                                (answer, "claude (re-learned)")
+                            }
+                        } else {
+                            // LAYER 3: Ask Claude (last resort)
+                            let answer = ask_claude_and_learn(&req.question, &memory_key, &mut world);
+                            (answer, "claude (first time)")
+                        }
                     };
 
-                    println!("  → Answered from: {}", source);
+                    println!("  → Answered from: {} (cortex exp: {}, accuracy: {:.2})",
+                        source, world.cortex.experience(), world.cortex.accuracy);
 
-                    // Record the interaction
                     world.session_memory.record_interaction(
                         world.tick_count,
                         &req.question,
-                        if source == "memory" { 1.0 } else { 0.5 },
+                        match source {
+                            "cortex (learned)" => 2.0,
+                            "memory" => 1.0,
+                            _ => 0.5,
+                        },
                     );
 
                     let _ = req.response_tx.send(response);
@@ -134,10 +136,34 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+/// Ask Claude and teach the organism (both memory and cortex).
+fn ask_claude_and_learn(
+    question: &str,
+    memory_key: &str,
+    world: &mut organic_engine::simulation::World,
+) -> String {
+    let result = organic_tools::external::llm_query(question);
+    let answer = if result.success { result.output.clone() } else { "I don't know yet.".to_string() };
+
+    // Store in memory
+    let signals = text_to_store_signals(&answer);
+    world.tool_handler.memory.store(string_to_address(memory_key), signals);
+
+    // Teach the cortex — this is how it learns concepts
+    world.cortex.learn(question, &answer);
+    println!("  → Learned: stored in memory + taught cortex");
+
+    answer
+}
+
 /// Convert a string to a memory address (hash to f32 in 0-1 range).
+/// Uses a better hash to avoid collisions between similar strings.
 fn string_to_address(s: &str) -> f32 {
-    let hash = s.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    (hash % 10000) as f32 / 10000.0
+    let mut hash = 5381u64;
+    for (i, b) in s.bytes().enumerate() {
+        hash = hash.wrapping_mul(33).wrapping_add(b as u64).wrapping_add(i as u64 * 257);
+    }
+    (hash % 1000000) as f32 / 1000000.0
 }
 
 /// Convert text to signal values for storage in organism memory.
