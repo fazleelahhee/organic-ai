@@ -80,6 +80,8 @@ pub struct OrganicBrain {
     number_ring: crate::ring::NumberRing,
     /// Attractor memory — Hebbian weights, no string storage.
     attractor_memory: crate::memory::AttractorMemory,
+    /// Conversation context — tracks recent exchanges.
+    pub context: crate::thinking::ConversationContext,
     tick: u64,
     pub total_queries: u64,
     pub total_training: u64,
@@ -176,6 +178,7 @@ impl OrganicBrain {
             stdp_params: StdpParams::default(),
             number_ring: crate::ring::NumberRing::new(500, 1000),
             attractor_memory: crate::memory::AttractorMemory::new(),
+            context: crate::thinking::ConversationContext::new(5),
             tick: 0,
             total_queries: 0,
             total_training: 0,
@@ -321,15 +324,24 @@ impl OrganicBrain {
     pub fn process(&mut self, query: &str) -> String {
         self.total_queries += 1;
 
-        // The brain recalls from its attractor memory (Hebbian weights).
-        // If it has learned the answer, the weight matrix produces it.
-        // If not, returns empty — Claude teaches, brain stores.
-        let recalled = self.attractor_memory.recall(query);
-        if !recalled.trim().is_empty() {
-            return recalled;
+        // The brain THINKS — not just recalls.
+        // 1. Checks context (what were we talking about?)
+        // 2. Tries direct recall from Hebbian weights
+        // 3. Tries reasoning (chain recalls)
+        // 4. Tries creative blend (noise + pattern overlap)
+        let (response, source) = crate::thinking::think(
+            &self.attractor_memory,
+            &self.context,
+            query,
+        );
+
+        if !response.is_empty() {
+            // Record this turn in context
+            self.context.add_turn(query, &response);
+            return response;
         }
 
-        // Nothing in memory — return empty (caller will ask Claude)
+        // Nothing — brain doesn't know yet
         String::new()
     }
 
@@ -340,6 +352,8 @@ impl OrganicBrain {
     pub fn train(&mut self, input_text: &str, output_text: &str) {
         // Store in attractor memory (Hebbian weight update)
         self.attractor_memory.store(input_text, output_text);
+        // Record in context
+        self.context.add_turn(input_text, output_text);
 
         let input_pattern = self.encode_to_spikes(input_text);
         let output_pattern = self.encode_to_spikes(output_text);
