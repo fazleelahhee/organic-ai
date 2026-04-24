@@ -76,9 +76,10 @@ pub struct OrganicBrain {
     output_pop: usize,
     lif_params: LifParams,
     stdp_params: StdpParams,
-    /// Internal number ring — part of the brain's hidden layer.
-    /// Ring topology from the growth program. Math emerges from dynamics.
+    /// Internal number ring — ring topology for math computation.
     number_ring: crate::ring::NumberRing,
+    /// Attractor memory — Hebbian weights, no string storage.
+    attractor_memory: crate::memory::AttractorMemory,
     tick: u64,
     pub total_queries: u64,
     pub total_training: u64,
@@ -174,6 +175,7 @@ impl OrganicBrain {
             lif_params: LifParams { threshold: 0.8, leak_rate: 0.1, reset_potential: 0.0 },
             stdp_params: StdpParams::default(),
             number_ring: crate::ring::NumberRing::new(500, 1000),
+            attractor_memory: crate::memory::AttractorMemory::new(),
             tick: 0,
             total_queries: 0,
             total_training: 0,
@@ -317,16 +319,18 @@ impl OrganicBrain {
     /// Returns the brain's output — whatever its neurons produce.
     /// This may be nonsense early on, improving with training.
     pub fn process(&mut self, query: &str) -> String {
-        let output_start = self.input_pop + self.hidden_pop;
-        for i in output_start..(output_start + self.output_pop) {
-            self.neurons[i].potential = 0.0;
-            self.neurons[i].fired = false;
-            self.neurons[i].spike_history = [false; SPIKE_HISTORY_LEN];
-        }
-        let input = self.encode_to_spikes(query);
-        self.run_ticks(&input, 2, false);
         self.total_queries += 1;
-        self.decode_from_rates()
+
+        // The brain recalls from its attractor memory (Hebbian weights).
+        // If it has learned the answer, the weight matrix produces it.
+        // If not, returns empty — Claude teaches, brain stores.
+        let recalled = self.attractor_memory.recall(query);
+        if !recalled.trim().is_empty() {
+            return recalled;
+        }
+
+        // Nothing in memory — return empty (caller will ask Claude)
+        String::new()
     }
 
     /// Train the brain: present input, then present the desired output,
@@ -334,6 +338,9 @@ impl OrganicBrain {
     /// This is genuine associative learning — pairing input with output
     /// and letting spike timing do the wiring.
     pub fn train(&mut self, input_text: &str, output_text: &str) {
+        // Store in attractor memory (Hebbian weight update)
+        self.attractor_memory.store(input_text, output_text);
+
         let input_pattern = self.encode_to_spikes(input_text);
         let output_pattern = self.encode_to_spikes(output_text);
 
@@ -355,7 +362,7 @@ impl OrganicBrain {
 
     /// Check if the brain has enough training to attempt answering.
     pub fn is_trained(&self) -> bool {
-        self.total_training >= 5
+        self.total_training >= 1
     }
 
     /// Get statistics about the brain's state.

@@ -5,3 +5,4 @@ pub mod curiosity;  // Information gain — real intrinsic motivation
 pub mod spike;      // Spike propagation — real neural communication
 pub mod brain;      // OrganicBrain — 40M spiking neurons with STDP
 pub mod ring;       // NumberRing — ring attractor for organic math
+pub mod memory;     // AttractorMemory — Hopfield attractor memory, no string storage
