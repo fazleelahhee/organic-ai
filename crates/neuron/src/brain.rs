@@ -110,32 +110,50 @@ impl OrganicBrain {
             lo + t * (hi - lo)
         };
 
-        // Allocate all neurons with empty synapses
         let mut neurons: Vec<BrainNeuron> = Vec::with_capacity(total);
         for _ in 0..total {
             neurons.push(BrainNeuron::new());
         }
 
-        // Initialize sparse LOCAL connectivity.
-        // Each neuron connects to nearby neurons (locality principle — like real brains).
-        let locality_radius: usize = (total / 100).max(10).min(5000);
+        // LAYERED architecture with lateral inhibition.
+        // Input → Hidden: strong excitatory forward connections
+        // Hidden ↔ Hidden: lateral inhibition (keeps activity sparse)
+        // Hidden → Output: excitatory forward connections
+        // Output ↔ Output: lateral inhibition
 
-        for i in 0..total {
-            let n_syn = synapses_per;
-            for _ in 0..n_syn {
-                // Pick a source within locality radius
-                let offset = fast_rand(&mut seed, locality_radius * 2);
-                let source = if i + offset >= locality_radius {
-                    (i + offset - locality_radius) % total
-                } else {
-                    0
-                };
-                if source != i {
-                    let weight = fast_randf(&mut seed, 0.01, 0.15);
-                    neurons[i].synapses.push(BrainSynapse {
-                        source: source as u32,
-                        weight,
-                        last_pre_tick: 0,
+        // Input → Hidden
+        for h in input_pop..input_pop + hidden_pop {
+            for _ in 0..synapses_per.max(4) {
+                let src = fast_rand(&mut seed, input_pop);
+                neurons[h].synapses.push(BrainSynapse {
+                    source: src as u32, weight: 0.15, last_pre_tick: 0,
+                });
+            }
+            // Lateral inhibition within hidden
+            for _ in 0..2 {
+                let src = input_pop + fast_rand(&mut seed, hidden_pop);
+                if src != h {
+                    neurons[h].synapses.push(BrainSynapse {
+                        source: src as u32, weight: -0.3, last_pre_tick: 0,
+                    });
+                }
+            }
+        }
+
+        // Hidden → Output
+        for o in (input_pop + hidden_pop)..total {
+            for _ in 0..synapses_per.max(4) {
+                let src = input_pop + fast_rand(&mut seed, hidden_pop);
+                neurons[o].synapses.push(BrainSynapse {
+                    source: src as u32, weight: 0.15, last_pre_tick: 0,
+                });
+            }
+            // Lateral inhibition within output
+            for _ in 0..2 {
+                let src = input_pop + hidden_pop + fast_rand(&mut seed, output_pop);
+                if src != o {
+                    neurons[o].synapses.push(BrainSynapse {
+                        source: src as u32, weight: -0.3, last_pre_tick: 0,
                     });
                 }
             }
@@ -245,42 +263,45 @@ impl OrganicBrain {
                     total_input += input.get(i).copied().unwrap_or(0.0);
                 }
 
-                // Synaptic input from connected neurons that fired last tick
+                // Synaptic input — includes both excitatory (positive) and inhibitory (negative)
                 let synapse_count = self.neurons[i].synapses.len();
                 for s in 0..synapse_count {
                     let source = self.neurons[i].synapses[s].source;
                     if fired_set.contains(&source) {
-                        total_input += self.neurons[i].synapses[s].weight;
+                        total_input += self.neurons[i].synapses[s].weight; // negative = inhibition
                         self.neurons[i].synapses[s].last_pre_tick = self.tick;
                     }
                 }
 
-                // LIF integration
-                let fired = integrate_and_fire(
-                    &mut self.neurons[i].potential,
-                    total_input,
-                    &self.lif_params,
-                );
+                // Multiplicative leak (better stability than subtractive)
+                self.neurons[i].potential *= 0.9;
+                self.neurons[i].potential += total_input;
+                if self.neurons[i].potential < 0.0 { self.neurons[i].potential = 0.0; }
+
+                let fired = self.neurons[i].potential >= self.lif_params.threshold;
+                if fired { self.neurons[i].potential = self.lif_params.reset_potential; }
                 self.neurons[i].fired = fired;
                 self.neurons[i].record_spike(fired);
                 if fired {
                     self.neurons[i].last_fire_tick = self.tick;
                 }
 
-                // STDP learning (only during training)
+                // STDP learning — only on excitatory synapses during training
                 if learn && fired {
                     let post_tick = self.tick;
                     let synapse_count = self.neurons[i].synapses.len();
                     for s in 0..synapse_count {
-                        let pre_tick = self.neurons[i].synapses[s].last_pre_tick;
-                        if pre_tick > 0 {
-                            apply_stdp(
-                                &mut self.neurons[i].synapses[s].weight,
-                                pre_tick,
-                                post_tick,
-                                0.0,
-                                &self.stdp_params,
-                            );
+                        if self.neurons[i].synapses[s].weight > 0.0 { // excitatory only
+                            let pre_tick = self.neurons[i].synapses[s].last_pre_tick;
+                            if pre_tick > 0 {
+                                apply_stdp(
+                                    &mut self.neurons[i].synapses[s].weight,
+                                    pre_tick,
+                                    post_tick,
+                                    0.0,
+                                    &self.stdp_params,
+                                );
+                            }
                         }
                     }
                 }
