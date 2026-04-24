@@ -82,6 +82,8 @@ pub struct OrganicBrain {
     attractor_memory: crate::memory::AttractorMemory,
     /// Conversation context — tracks recent exchanges.
     pub context: crate::thinking::ConversationContext,
+    /// Inner life — the brain thinks for itself.
+    pub inner_life: crate::inner_life::InnerLife,
     tick: u64,
     pub total_queries: u64,
     pub total_training: u64,
@@ -179,6 +181,7 @@ impl OrganicBrain {
             number_ring: crate::ring::NumberRing::new(500, 1000),
             attractor_memory: crate::memory::AttractorMemory::new(),
             context: crate::thinking::ConversationContext::new(5),
+            inner_life: crate::inner_life::InnerLife::new(),
             tick: 0,
             total_queries: 0,
             total_training: 0,
@@ -323,6 +326,7 @@ impl OrganicBrain {
     /// This may be nonsense early on, improving with training.
     pub fn process(&mut self, query: &str) -> String {
         self.total_queries += 1;
+        self.inner_life.record_interaction(query);
 
         // The brain THINKS — not just recalls.
         // 1. Checks context (what were we talking about?)
@@ -372,6 +376,17 @@ impl OrganicBrain {
         self.run_ticks(&input_pattern, 1, true);
 
         self.total_training += 1;
+    }
+
+    /// Let the brain think for itself — called periodically by the simulation.
+    /// Returns a thought if the brain discovered something new.
+    pub fn tick_inner_life(&mut self, tick: u64) -> Option<crate::inner_life::Thought> {
+        self.inner_life.tick_boredom();
+        if self.inner_life.should_think(tick) {
+            self.inner_life.daydream(&mut self.attractor_memory, tick)
+        } else {
+            None
+        }
     }
 
     /// Check if the brain has enough training to attempt answering.

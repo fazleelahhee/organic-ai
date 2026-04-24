@@ -79,10 +79,16 @@ async fn main() {
                 }
             }
 
+            // Let the brain think for itself
+            if let Some(thought) = world.brain.tick_inner_life(world.tick_count) {
+                println!("  [thought] {} → {}", thought.seed, thought.insight);
+            }
+
             let snap = world.snapshot();
             if snap.tick % 1000 == 0 {
-                println!("tick {} | organisms: {} | resources: {}",
-                    snap.tick, snap.organism_count, snap.resource_count);
+                println!("tick {} | organisms: {} | resources: {} | thoughts: {}",
+                    snap.tick, snap.organism_count, snap.resource_count,
+                    world.brain.inner_life.total_thoughts);
             }
             if snap.tick % 5000 == 0 && snap.tick > 0 {
                 let _ = organic_engine::persistence::save_world(&world, &save_path);
