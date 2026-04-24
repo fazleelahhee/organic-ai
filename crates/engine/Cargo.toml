@@ -12,3 +12,7 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = "1"
+
+[[test]]
+name = "integration"
+path = "../../tests/integration/simulation_test.rs"

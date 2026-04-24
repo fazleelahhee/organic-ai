@@ -63,11 +63,18 @@ impl Genome {
         use Condition::*;
         use GrowthAction::*;
         Self {
+            // Rules are evaluated in order; first match fires.
+            // Differentiation rules come before Divide so deep cells specialise
+            // instead of growing forever.
             growth_program: vec![
+                // Deep-enough cells become Motor first (checked before Sensor
+                // so a Motor cell is never overwritten by Sensor rule).
+                GrowthRule { conditions: vec![DepthGreaterThan(3)], action: Differentiate(CellType::Motor) },
+                // Cells at moderate depth become Sensors.
+                GrowthRule { conditions: vec![DepthGreaterThan(1)], action: Differentiate(CellType::Sensor) },
+                // Shallow cells that are young enough divide to grow the body.
                 GrowthRule { conditions: vec![AgeGreaterThan(2), NeighborCountLessThan(4)], action: Divide(DirectionChoice::Random) },
-                GrowthRule { conditions: vec![DepthGreaterThan(4), NeighborCountLessThan(3)], action: Differentiate(CellType::Sensor) },
-                GrowthRule { conditions: vec![DepthGreaterThan(6)], action: Differentiate(CellType::Motor) },
-                GrowthRule { conditions: vec![AgeGreaterThan(8)], action: Connect { max_distance: 3, target_type: CellType::Inter } },
+                // Dense clusters halt (converted to Inter by the simulator).
                 GrowthRule { conditions: vec![NeighborCountGreaterThan(5)], action: Halt },
             ],
             learning_params: LearningParams::default(),
