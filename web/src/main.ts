@@ -43,6 +43,11 @@ function renderLoop() {
 
     const maxGen = latestSnapshot.organisms.reduce((max, o) => Math.max(max, o.generation), 0);
     maxGenEl.textContent = maxGen.toString();
+
+    const coverageEl = document.getElementById("coverage");
+    if (coverageEl) {
+      coverageEl.textContent = `${latestSnapshot.archive_coverage}/${latestSnapshot.archive_capacity}`;
+    }
   }
   requestAnimationFrame(renderLoop);
 }

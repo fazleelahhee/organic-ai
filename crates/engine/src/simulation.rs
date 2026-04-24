@@ -5,6 +5,8 @@ use organic_core::organism::{LifecyclePhase, Organism, OrganismId};
 use organic_growth::interpreter::{count_neighbors, execute_growth_step, EvalContext, GrowthResult};
 use organic_substrate::grid::Grid;
 use organic_substrate::sal::{ActionResult, SubstrateInterface};
+use organic_evolution::archive::QDArchive;
+use organic_evolution::behavior::BehaviorDescriptor;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +34,7 @@ pub struct World {
     pub grid: Grid,
     pub organisms: Vec<Organism>,
     pub tick_count: u64,
+    pub qd_archive: QDArchive,
     next_organism_id: OrganismId,
     rng: rand::rngs::ThreadRng,
 }
@@ -44,6 +47,9 @@ pub struct WorldSnapshot {
     pub organisms: Vec<OrganismSnapshot>,
     pub resource_count: usize,
     pub organism_count: usize,
+    pub archive_coverage: usize,
+    pub archive_capacity: usize,
+    pub max_generation: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,7 +85,7 @@ impl World {
             next_id += 1;
         }
 
-        Self { grid, organisms, tick_count: 0, next_organism_id: next_id, rng }
+        Self { grid, organisms, tick_count: 0, qd_archive: QDArchive::new(20), next_organism_id: next_id, rng }
     }
 
     pub fn allocate_organism_id(&mut self) -> OrganismId {
@@ -228,7 +234,31 @@ impl World {
             }
         }
 
+        // Novelty bonus — novel offspring get an energy boost
+        for child in &mut new_organisms {
+            let child_behavior = BehaviorDescriptor::from_organism(child);
+            let novelty = self.qd_archive.novelty_score(&child_behavior, 5);
+            child.energy += novelty * 2.0; // novel organisms get up to ~2 extra energy
+        }
+
         self.organisms.extend(new_organisms);
+
+        // QD Archive update (every 100 ticks)
+        if self.tick_count % 100 == 0 {
+            for org in &self.organisms {
+                if org.phase == LifecyclePhase::Living {
+                    let behavior = BehaviorDescriptor::from_organism(org);
+                    let fitness = org.energy;
+                    self.qd_archive.try_insert(
+                        org.genome.clone(),
+                        behavior,
+                        fitness,
+                        org.generation,
+                    );
+                }
+            }
+        }
+
         self.organisms.retain(|o| o.is_alive());
         self.tick_count += 1;
     }
@@ -252,6 +282,9 @@ impl World {
             }).collect(),
             resource_count,
             organism_count: self.organisms.len(),
+            archive_coverage: self.qd_archive.coverage(),
+            archive_capacity: self.qd_archive.capacity(),
+            max_generation: self.organisms.iter().map(|o| o.generation).max().unwrap_or(0),
         }
     }
 }
