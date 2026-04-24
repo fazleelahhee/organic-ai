@@ -1,7 +1,6 @@
-use organic_core::cell::{Cell, CellId, CellType};
+use organic_core::cell::{Cell, CellType};
 use organic_core::direction::{Direction, Position};
 use organic_core::genome::{Condition, DirectionChoice, GrowthAction, GrowthRule};
-use organic_substrate::sal::SubstrateInterface;
 use rand::Rng;
 
 pub struct EvalContext {
