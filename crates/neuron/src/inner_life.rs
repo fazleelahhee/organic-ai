@@ -9,7 +9,7 @@
 /// All through existing Hebbian weights. No new mechanisms.
 /// The curiosity drive triggers thinking when information gain is low.
 
-use crate::memory::AttractorMemory;
+use crate::hdc::HDCMemory;
 use crate::thinking::{chain_recall, ConversationContext};
 use serde::{Deserialize, Serialize};
 
@@ -84,7 +84,7 @@ impl InnerLife {
     /// The brain thinks for itself.
     /// Picks a random recent cue, chains recalls, discovers connections.
     /// Stores new insights back in memory.
-    pub fn daydream(&mut self, memory: &mut AttractorMemory, tick: u64) -> Option<Thought> {
+    pub fn daydream(&mut self, memory: &mut HDCMemory, tick: u64) -> Option<Thought> {
         if self.recent_cues.is_empty() { return None; }
 
         // Pick a seed — use tick as pseudo-random index
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_daydream_with_knowledge() {
         let mut il = InnerLife::new();
-        let mut mem = AttractorMemory::new();
+        let mut mem = HDCMemory::new();
         mem.store("dog", "animal");
         mem.store("animal", "living thing");
         mem.store("living thing", "biology");
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn test_no_daydream_without_cues() {
         let mut il = InnerLife::new();
-        let mut mem = AttractorMemory::new();
+        let mut mem = HDCMemory::new();
         let thought = il.daydream(&mut mem, 100);
         assert!(thought.is_none());
     }

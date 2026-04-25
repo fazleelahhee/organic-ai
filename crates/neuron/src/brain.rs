@@ -78,8 +78,9 @@ pub struct OrganicBrain {
     stdp_params: StdpParams,
     /// Internal number ring — ring topology for math computation.
     number_ring: crate::ring::NumberRing,
-    /// Attractor memory — Hebbian weights, no string storage.
-    attractor_memory: crate::memory::AttractorMemory,
+    /// HDC memory — hyperdimensional computing. 10,000x capacity.
+    /// Replaces Hebbian matrix. Compositional, one-shot, noise-tolerant.
+    hdc_memory: crate::hdc::HDCMemory,
     /// Conversation context — tracks recent exchanges.
     pub context: crate::thinking::ConversationContext,
     /// Inner life — the brain thinks for itself.
@@ -181,7 +182,7 @@ impl OrganicBrain {
             lif_params: LifParams { threshold: 0.8, leak_rate: 0.1, reset_potential: 0.0 },
             stdp_params: StdpParams::default(),
             number_ring: crate::ring::NumberRing::new(500, 1000),
-            attractor_memory: crate::memory::AttractorMemory::new(),
+            hdc_memory: crate::hdc::HDCMemory::new(),
             context: crate::thinking::ConversationContext::new(5),
             inner_life: crate::inner_life::InnerLife::new(),
             working_memory: crate::working_memory::WorkingMemory::new(),
@@ -339,7 +340,7 @@ impl OrganicBrain {
             if let Some(instruction) = self.working_memory.current_instruction() {
                 let step_query = instruction.to_string();
                 // Execute this step using recall
-                let step_result = self.attractor_memory.recall(&step_query);
+                let step_result = self.hdc_memory.recall(&step_query);
                 let result = if !step_result.trim().is_empty() {
                     step_result
                 } else {
@@ -369,7 +370,7 @@ impl OrganicBrain {
         // If chain produces 2+ hops, use working memory to execute them.
         // No keyword matching — the brain discovers structure from its own weights.
         {
-            let chain = crate::thinking::chain_recall(&self.attractor_memory, query, 5);
+            let chain = crate::thinking::chain_recall(&self.hdc_memory, query, 5);
             if chain.len() >= 2 {
                 // Store chain as a plan
                 self.working_memory.clear();
@@ -378,7 +379,7 @@ impl OrganicBrain {
                 self.working_memory.store("query", query);
                 // Execute first step
                 if let Some(instruction) = self.working_memory.current_instruction() {
-                    let step_result = self.attractor_memory.recall(instruction);
+                    let step_result = self.hdc_memory.recall(instruction);
                     if !step_result.trim().is_empty() {
                         self.working_memory.complete_step(&step_result);
                     }
@@ -406,7 +407,7 @@ impl OrganicBrain {
 
         // Fast: attractor memory recall with context
         let (fast_response, _source) = crate::thinking::think(
-            &self.attractor_memory,
+            &self.hdc_memory,
             &self.context,
             query,
         );
@@ -462,7 +463,7 @@ impl OrganicBrain {
     /// and letting spike timing do the wiring.
     pub fn train(&mut self, input_text: &str, output_text: &str) {
         // Compute surprise — how different is this from what the brain expected?
-        let predicted = self.attractor_memory.recall(input_text);
+        let predicted = self.hdc_memory.recall(input_text);
         let surprise = crate::curiosity::compute_information_gain(
             predicted.len() as f32 / 100.0,  // rough measure of prediction
             output_text.len() as f32 / 100.0, // rough measure of actual
@@ -472,7 +473,7 @@ impl OrganicBrain {
         // High surprise → brain learns strongly (novel information)
         // Low surprise → brain already knew this (minimal update)
         if surprise > 0.1 {
-            self.attractor_memory.store(input_text, output_text);
+            self.hdc_memory.store(input_text, output_text);
         }
 
         // Feed inner life — surprising inputs drive more daydreaming
@@ -509,7 +510,7 @@ impl OrganicBrain {
     pub fn tick_inner_life(&mut self, tick: u64) -> Option<crate::inner_life::Thought> {
         self.inner_life.tick_boredom();
         if self.inner_life.should_think() {
-            self.inner_life.daydream(&mut self.attractor_memory, tick)
+            self.inner_life.daydream(&mut self.hdc_memory, tick)
         } else {
             None
         }

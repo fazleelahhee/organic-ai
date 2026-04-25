@@ -6,7 +6,7 @@
 /// Context = recent conversation history appended to cue
 /// Creativity = noise injection + pattern blending
 
-use crate::memory::AttractorMemory;
+use crate::hdc::HDCMemory;
 use serde::{Deserialize, Serialize};
 
 /// Conversation context — recent exchanges tracked as a rolling window.
@@ -68,7 +68,7 @@ impl ConversationContext {
 ///   recall("Japan") → "Tokyo" → recall("Tokyo") → "largest city in Japan"
 ///
 /// This is genuine reasoning through association — how biological memory works.
-pub fn chain_recall(memory: &AttractorMemory, cue: &str, max_hops: usize) -> Vec<String> {
+pub fn chain_recall(memory: &HDCMemory, cue: &str, max_hops: usize) -> Vec<String> {
     let mut chain = Vec::new();
     let mut current_cue = cue.to_string();
 
@@ -96,7 +96,7 @@ pub fn chain_recall(memory: &AttractorMemory, cue: &str, max_hops: usize) -> Vec
 ///   Blended output = novel combination
 ///
 /// The noise is genuine neural noise — random perturbation of the cue pattern.
-pub fn creative_recall(memory: &AttractorMemory, cue: &str, variations: usize) -> Vec<String> {
+pub fn creative_recall(memory: &HDCMemory, cue: &str, variations: usize) -> Vec<String> {
     let mut results = Vec::new();
 
     // Original recall
@@ -133,7 +133,7 @@ pub fn creative_recall(memory: &AttractorMemory, cue: &str, variations: usize) -
 /// 3. Try reasoning — can I chain recalls to figure it out?
 /// 4. Try creative blend — can I combine patterns for something new?
 pub fn think(
-    memory: &AttractorMemory,
+    memory: &HDCMemory,
     context: &ConversationContext,
     question: &str,
 ) -> (String, &'static str) {
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_chain_recall() {
-        let mut mem = AttractorMemory::new();
+        let mut mem = HDCMemory::new();
         mem.store("dog", "animal");
         mem.store("animal", "living thing");
         let chain = chain_recall(&mem, "dog", 3);
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_creative_recall() {
-        let mut mem = AttractorMemory::new();
+        let mut mem = HDCMemory::new();
         mem.store("ocean", "waves crashing on the shore");
         mem.store("ocean beautiful", "blue waters stretching to the horizon");
         let results = creative_recall(&mem, "ocean", 3);
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_think_direct() {
-        let mut mem = AttractorMemory::new();
+        let mut mem = HDCMemory::new();
         mem.store("hello", "hi there");
         let ctx = ConversationContext::new(5);
         let (response, source) = think(&mem, &ctx, "hello");
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_think_with_context() {
-        let mut mem = AttractorMemory::new();
+        let mut mem = HDCMemory::new();
         mem.store("Japan", "Tokyo");
         // Store with context pattern too
         let q = "Japan Tokyo what country is that in";
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_think_unknown() {
-        let mem = AttractorMemory::new();
+        let mem = HDCMemory::new();
         let ctx = ConversationContext::new(5);
         let (response, source) = think(&mem, &ctx, "xyzzy gibberish");
         assert_eq!(source, "unknown");
