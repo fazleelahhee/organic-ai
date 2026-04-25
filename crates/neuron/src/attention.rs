@@ -1,13 +1,34 @@
 /// Attention via gain modulation.
 ///
-/// Projects input patterns to queries and hidden firing rates to keys,
-/// computes a dot-product relevance score, and produces per-neuron
-/// multiplicative gains in [0.5, 2.0].  This lets the brain selectively
-/// amplify or suppress hidden-layer activity — organic attention.
+/// Two paths now coexist:
+///
+/// 1. **Global gain (legacy)**: projects input patterns to queries and
+///    hidden firing rates to keys, computes a single dot-product, applies
+///    the same scaled gain to every hidden neuron. One-shot, content-light.
+///
+/// 2. **Per-column content-dependent gain (new, 2026-04-25)**: each
+///    cortical column carries a learned attention key (a 256-dim vector).
+///    At each tick, the brain compresses the current input frame into the
+///    same 256-dim space and computes per-column similarity. High-similarity
+///    columns get amplified; low-similarity columns get suppressed.
+///
+///    Hebbian-style learning: when a column fires above its baseline, its
+///    attention key drifts toward the current input. Over experience, each
+///    column develops a "preferred input" — the inputs it's been firing
+///    for. This is the inductive bias for compositional reasoning: at
+///    inference, columns whose preferred inputs match parts of a novel
+///    query light up, even if that exact query was never seen before.
+///
+///    This is the SNN analogue of transformer attention's "which tokens
+///    matter for this query" mechanism, restricted to per-column granularity
+///    so it's tractable at 80M-neuron scale (8 columns × 256 dims = 2048
+///    keys instead of one key per neuron).
 
 use serde::{Deserialize, Serialize};
 
 const ATTENTION_DIM: usize = 512;
+/// Compressed input dimension used by per-column attention keys.
+pub const COL_KEY_DIM: usize = 256;
 
 /// Gain-modulation attention module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,10 +45,33 @@ pub struct AttentionModule {
     input_samples: usize,
     /// Number of hidden samples kept.
     hidden_samples: usize,
+    /// One learned attention key per cortical column. Each key is a
+    /// COL_KEY_DIM-dim vector in the same compressed input space the brain
+    /// projects each tick's frame into. At inference, similarity between
+    /// the current frame's compression and each column's key produces a
+    /// per-column gain. At learning, active columns drift their keys
+    /// toward the current input — Hebbian "neurons that fire together
+    /// wire together," at the column level.
+    #[serde(default)]
+    pub(crate) column_keys: Vec<Vec<f32>>,
+    /// Stride into the input population for compressing a frame to
+    /// COL_KEY_DIM. Set at construction so input_pop / col_input_stride ≈
+    /// COL_KEY_DIM. Stored so compression is consistent across calls.
+    #[serde(default)]
+    pub(crate) col_input_stride: usize,
 }
 
 impl AttentionModule {
     pub fn new(input_pop: usize, hidden_pop: usize, seed: u64) -> Self {
+        Self::new_with_columns(input_pop, hidden_pop, 1, seed)
+    }
+
+    pub fn new_with_columns(
+        input_pop: usize,
+        hidden_pop: usize,
+        num_columns: usize,
+        seed: u64,
+    ) -> Self {
         let sample_stride = 64.max(1);
         let input_samples = (input_pop / sample_stride).max(1).min(ATTENTION_DIM);
         let hidden_samples = (hidden_pop / sample_stride).max(1).min(ATTENTION_DIM);
@@ -51,6 +95,15 @@ impl AttentionModule {
             key_weights.push(fast_randf(&mut state));
         }
 
+        // Per-column attention keys, small random init.
+        let mut column_keys: Vec<Vec<f32>> = Vec::with_capacity(num_columns);
+        for _ in 0..num_columns {
+            let mut k = Vec::with_capacity(COL_KEY_DIM);
+            for _ in 0..COL_KEY_DIM { k.push(fast_randf(&mut state)); }
+            column_keys.push(k);
+        }
+        let col_input_stride = (input_pop / COL_KEY_DIM).max(1);
+
         Self {
             query_weights,
             key_weights,
@@ -58,6 +111,57 @@ impl AttentionModule {
             sample_stride,
             input_samples,
             hidden_samples,
+            column_keys,
+            col_input_stride,
+        }
+    }
+
+    /// Compress an input frame into a COL_KEY_DIM-dim vector by stride
+    /// sampling. Same projection used by attention keys, so similarity is
+    /// computed in a consistent space.
+    pub fn compress_input(&self, input: &[f32]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(COL_KEY_DIM);
+        for i in 0..COL_KEY_DIM {
+            let idx = i * self.col_input_stride;
+            out.push(input.get(idx).copied().unwrap_or(0.0));
+        }
+        out
+    }
+
+    /// Per-column gain in [0.6, 1.6], from cosine-like similarity between
+    /// compressed input and each column's learned key. Returns one gain
+    /// per column. Columns whose keys match the current frame are amplified;
+    /// orthogonal columns are mildly suppressed.
+    pub fn column_gains(&self, compressed_input: &[f32]) -> Vec<f32> {
+        self.column_keys.iter().map(|key| {
+            let dot: f32 = key.iter().zip(compressed_input.iter())
+                .map(|(k, x)| k * x).sum();
+            // Sigmoid-like map with center at 0 → gain 1.0
+            let g = 1.0 + dot.tanh() * 0.6;
+            g.clamp(0.6, 1.6)
+        }).collect()
+    }
+
+    /// Hebbian update: when a column's mean firing activity is above
+    /// baseline, its attention key drifts toward the compressed input.
+    /// `column_activities` is per-column mean firing rate (length =
+    /// num_columns), in [0, 1].
+    pub fn learn_column_keys(
+        &mut self,
+        compressed_input: &[f32],
+        column_activities: &[f32],
+        lr: f32,
+    ) {
+        let baseline = column_activities.iter().sum::<f32>()
+            / column_activities.len().max(1) as f32;
+        for (c, key) in self.column_keys.iter_mut().enumerate() {
+            let activity = column_activities.get(c).copied().unwrap_or(0.0);
+            let drive = (activity - baseline).max(0.0);
+            if drive < 1e-3 { continue; }
+            let step = lr * drive;
+            for (k, x) in key.iter_mut().zip(compressed_input.iter()) {
+                *k += step * (x - *k);   // exponential moving average toward input
+            }
         }
     }
 

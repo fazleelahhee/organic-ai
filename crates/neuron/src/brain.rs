@@ -47,6 +47,12 @@ const WITHIN_COLUMN_PROB: f32 = 0.60;
 /// columns for the production-scale brain.
 const TARGET_COLUMNS: usize = 16;
 
+/// Compute the actual number of cortical columns for a given hidden_pop.
+/// Centralized here so brain init and attention init agree exactly.
+fn compute_num_columns(hidden_pop: usize) -> usize {
+    (hidden_pop / 64).max(2).min(TARGET_COLUMNS)
+}
+
 fn default_delay() -> u8 { 1 }
 
 /// A synapse in the brain — an incoming connection from source to this neuron.
@@ -180,11 +186,9 @@ impl OrganicBrain {
         // Hidden → Output: excitatory forward (delay 1)
         // Output ↔ Output: lateral inhibition (delay 1)
 
-        // Cortical column geometry. We aim for ~64 neurons/column but cap
-        // total columns at TARGET_COLUMNS so production-scale brains don't
-        // explode the column count, and floor at 2 so test brains have at
-        // least some structural division.
-        let num_columns = (hidden_pop / 64).max(2).min(TARGET_COLUMNS);
+        // Cortical column geometry. Centralized in compute_num_columns so
+        // attention init and brain init agree on count.
+        let num_columns = compute_num_columns(hidden_pop);
         let column_size = (hidden_pop / num_columns).max(1);
 
         // Input → Hidden
@@ -286,7 +290,8 @@ impl OrganicBrain {
             lsm_readout: crate::lsm::LsmReadout::new(hidden_pop, 42),
             pred_input_to_hidden: crate::predictive::PredictionLayer::new(),
             pred_hidden_to_output: crate::predictive::PredictionLayer::new(),
-            attention: crate::attention::AttentionModule::new(input_pop, hidden_pop, 42),
+            attention: crate::attention::AttentionModule::new_with_columns(
+                input_pop, hidden_pop, compute_num_columns(hidden_pop), 42),
             tick: 0,
             total_queries: 0,
             total_training: 0,
@@ -580,6 +585,9 @@ impl OrganicBrain {
             .filter(|(_, n)| n.fired).map(|(i, _)| i as u32).collect();
         fired_history[1] = initial_fired;
 
+        let num_columns = compute_num_columns(hidden_pop);
+        let column_size = (hidden_pop / num_columns).max(1);
+
         for tick_iter in 0..n_ticks {
             self.tick += 1;
             let tick = self.tick;
@@ -591,6 +599,18 @@ impl OrganicBrain {
                 (Some(s), _) => s,
                 (None, Some(fs)) if !fs.is_empty() => &fs[tick_iter % fs.len()],
                 _ => &[],
+            };
+
+            // Per-column content-dependent attention gain: amplify columns
+            // whose learned attention key matches the current input frame,
+            // suppress those that don't. Applied EVERY tick (not one-shot)
+            // so attention tracks the temporal stream as different chars
+            // pass through. Cheap: O(num_columns × COL_KEY_DIM).
+            let column_gains: Vec<f32> = if !input.is_empty() {
+                let compressed = self.attention.compress_input(input);
+                self.attention.column_gains(&compressed)
+            } else {
+                vec![1.0; num_columns]
             };
 
             // Pre-tick state for predictive coding.
@@ -652,6 +672,20 @@ impl OrganicBrain {
                 neuron.potential += total_input;
                 if neuron.potential < 0.0 { neuron.potential = 0.0; }
 
+                // Per-column content-dependent attention gain. Hidden
+                // neurons are scaled by their column's gain, computed from
+                // similarity between the current input frame and the
+                // column's learned attention key. This is what makes
+                // attention CONTENT-DEPENDENT — the same neuron is
+                // amplified or suppressed based on what's in the input
+                // right now, not just whether anything is in the input.
+                if i >= input_pop && i < input_pop + hidden_pop {
+                    let col = (i - input_pop) / column_size.max(1);
+                    if col < column_gains.len() {
+                        neuron.potential *= column_gains[col];
+                    }
+                }
+
                 // Fire check — natural threshold OR teacher-forced clamp.
                 // Clamped firings let train_spiking force output neurons to
                 // fire so STDP can wire their incoming synapses, even when
@@ -692,6 +726,30 @@ impl OrganicBrain {
             let curr_output = self.sample_layer_rates(input_pop + hidden_pop, output_pop, PRED_DIM);
             self.pred_input_to_hidden.update(&prev_input, &curr_hidden);
             self.pred_hidden_to_output.update(&prev_hidden, &curr_output);
+
+            // Hebbian update of per-column attention keys. Columns whose
+            // mean firing rate is above the population baseline drift
+            // their attention key toward the current input. Over time
+            // each column develops a "preferred input" — what it's been
+            // firing for. This is the structural inductive bias for
+            // compositional reasoning: at inference, columns whose keys
+            // match parts of a novel query light up even if that query
+            // is unseen, because the keys carry abstracted past experience.
+            if !input.is_empty() {
+                let mut column_activities = vec![0.0f32; num_columns];
+                for c in 0..num_columns {
+                    let start = input_pop + c * column_size;
+                    let end = (start + column_size).min(input_pop + hidden_pop);
+                    if end <= start { continue; }
+                    let mean: f32 = self.neurons[start..end].iter()
+                        .map(|n| n.firing_rate()).sum::<f32>()
+                        / (end - start) as f32;
+                    column_activities[c] = mean;
+                }
+                let compressed = self.attention.compress_input(input);
+                let lr = if learn { 0.05 } else { 0.01 };
+                self.attention.learn_column_keys(&compressed, &column_activities, lr);
+            }
 
             // Advance fired_history: the neurons that just fired this tick
             // become the new "fired 1 tick ago" entry. Older entries shift
