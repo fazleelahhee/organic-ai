@@ -141,6 +141,8 @@ impl WorkingMemory {
 
     /// Store a value in the next available register.
     /// The value is encoded as a neural activity pattern — no strings stored.
+    /// `_name` is unused: registers are neural activity patterns, not string-keyed slots.
+    /// Callers pass a name for documentation purposes, but lookup is by recency/strength.
     pub fn store(&mut self, _name: &str, value: &str) -> bool {
         // Find empty register
         for reg in &mut self.registers {

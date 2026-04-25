@@ -68,7 +68,7 @@ impl ConversationContext {
 ///   recall("Japan") → "Tokyo" → recall("Tokyo") → "largest city in Japan"
 ///
 /// This is genuine reasoning through association — how biological memory works.
-pub fn chain_recall(memory: &HDCMemory, cue: &str, max_hops: usize) -> Vec<String> {
+pub fn chain_recall(memory: &mut HDCMemory, cue: &str, max_hops: usize) -> Vec<String> {
     let mut chain = Vec::new();
     let mut current_cue = cue.to_string();
 
@@ -96,7 +96,7 @@ pub fn chain_recall(memory: &HDCMemory, cue: &str, max_hops: usize) -> Vec<Strin
 ///   Blended output = novel combination
 ///
 /// The noise is genuine neural noise — random perturbation of the cue pattern.
-pub fn creative_recall(memory: &HDCMemory, cue: &str, variations: usize) -> Vec<String> {
+pub fn creative_recall(memory: &mut HDCMemory, cue: &str, variations: usize) -> Vec<String> {
     let mut results = Vec::new();
 
     // Original recall
@@ -133,23 +133,23 @@ pub fn creative_recall(memory: &HDCMemory, cue: &str, variations: usize) -> Vec<
 /// 3. Try reasoning — can I chain recalls to figure it out?
 /// 4. Try creative blend — can I combine patterns for something new?
 pub fn think(
-    memory: &HDCMemory,
+    memory: &mut HDCMemory,
     context: &ConversationContext,
     question: &str,
 ) -> (String, &'static str) {
-    // Step 1: Build contextual cue
-    let contextual_cue = context.contextualize(question);
-
-    // Step 2: Direct recall with context
-    let direct = memory.recall(&contextual_cue);
-    if !direct.trim().is_empty() {
-        return (direct, "recall+context");
-    }
-
-    // Step 3: Direct recall without context
+    // Step 1: Direct recall without context — try raw first to avoid
+    // context prepending causing wrong matches (e.g., "France Paris" prefix
+    // matching France entry when asking about Japan).
     let direct_raw = memory.recall(question);
     if !direct_raw.trim().is_empty() {
         return (direct_raw, "recall");
+    }
+
+    // Step 2: Build contextual cue and try recall with context
+    let contextual_cue = context.contextualize(question);
+    let direct = memory.recall(&contextual_cue);
+    if !direct.trim().is_empty() {
+        return (direct, "recall+context");
     }
 
     // Step 4: Reasoning — chain recalls
@@ -199,7 +199,7 @@ mod tests {
         let mut mem = HDCMemory::new();
         mem.store("dog", "animal");
         mem.store("animal", "living thing");
-        let chain = chain_recall(&mem, "dog", 3);
+        let chain = chain_recall(&mut mem, "dog", 3);
         assert!(chain.len() >= 1);
     }
 
@@ -208,7 +208,7 @@ mod tests {
         let mut mem = HDCMemory::new();
         mem.store("ocean", "waves crashing on the shore");
         mem.store("ocean beautiful", "blue waters stretching to the horizon");
-        let results = creative_recall(&mem, "ocean", 3);
+        let results = creative_recall(&mut mem, "ocean", 3);
         assert!(!results.is_empty());
     }
 
@@ -217,7 +217,7 @@ mod tests {
         let mut mem = HDCMemory::new();
         mem.store("hello", "hi there");
         let ctx = ConversationContext::new(5);
-        let (response, source) = think(&mem, &ctx, "hello");
+        let (response, source) = think(&mut mem, &ctx, "hello");
         assert!(source == "recall" || source == "recall+context");
         assert!(!response.is_empty());
     }
@@ -231,15 +231,15 @@ mod tests {
         mem.store(q, "Japan is the country");
         let mut ctx = ConversationContext::new(5);
         ctx.add_turn("Japan", "Tokyo");
-        let (response, source) = think(&mem, &ctx, "what country is that in");
+        let (response, source) = think(&mut mem, &ctx, "what country is that in");
         assert!(!response.is_empty());
     }
 
     #[test]
     fn test_think_unknown() {
-        let mem = HDCMemory::new();
+        let mut mem = HDCMemory::new();
         let ctx = ConversationContext::new(5);
-        let (response, source) = think(&mem, &ctx, "xyzzy gibberish");
+        let (response, source) = think(&mut mem, &ctx, "xyzzy gibberish");
         assert_eq!(source, "unknown");
         assert!(response.is_empty());
     }

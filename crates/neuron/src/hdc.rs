@@ -178,6 +178,8 @@ impl HDCMemory {
         // Check if key already exists (update)
         for item in &mut self.items {
             if item.0.similarity(&key_vec) > 0.7 {
+                // Update existing entry — intentionally does NOT increment total_stored
+                // because this is an update, not a new storage operation.
                 item.1 = value.to_string();
                 item.2 = key.to_string();
                 return;
@@ -189,7 +191,8 @@ impl HDCMemory {
     }
 
     /// Recall: find the closest stored key and return its value.
-    pub fn recall(&self, query: &str) -> String {
+    pub fn recall(&mut self, query: &str) -> String {
+        self.total_recalls += 1;
         let query_vec = self.encode(query);
         let mut best_sim = -1.0f32;
         let mut best_val = String::new();
@@ -252,7 +255,7 @@ impl HDCMemory {
 
         for (key_vec, value, _) in &self.items {
             let sim = d_vec.similarity(key_vec);
-            if sim > best_sim && sim > 0.1 {
+            if sim > best_sim && sim > 0.4 {
                 best_sim = sim;
                 best_val = value.clone();
             }

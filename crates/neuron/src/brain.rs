@@ -17,9 +17,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 const TOTAL_NEURONS: usize = 40_000_000;
-const INPUT_POP: usize = 1_000_000;     // 1M input neurons
-const HIDDEN_POP: usize = 38_000_000;   // 38M recurrent hidden neurons
-const OUTPUT_POP: usize = 1_000_000;    // 1M output neurons
+const INPUT_POP: usize = 1_000_000;
+const HIDDEN_POP: usize = 38_000_000;
+const OUTPUT_POP: usize = 1_000_000;
 const MAX_SYNAPSES_PER_NEURON: usize = 4;
 const SPIKE_HISTORY_LEN: usize = 8;
 
@@ -179,8 +179,9 @@ impl OrganicBrain {
             }
         }
 
+        let actual_synapses: usize = neurons.iter().map(|n| n.synapses.len()).sum();
         println!("Brain initialized: {} neurons, {} synapses",
-            total, total * synapses_per);
+            total, actual_synapses);
 
         Self {
             neurons,
@@ -347,67 +348,10 @@ impl OrganicBrain {
         self.inner_life.set_busy();
         self.inner_life.record_interaction(query);
 
-        // STEP 1: Check if there's an active plan — continue executing it
-        if self.working_memory.has_pending_steps() {
-            if let Some(instruction) = self.working_memory.current_instruction() {
-                let step_query = instruction.to_string();
-                // Execute this step using recall
-                let step_result = self.hdc_memory.recall(&step_query);
-                let result = if !step_result.trim().is_empty() {
-                    step_result
-                } else {
-                    // Can't execute step internally — return the instruction
-                    // so Claude can teach it
-                    self.inner_life.set_free();
-                    return String::new();
-                };
-                self.working_memory.complete_step(&result);
-                // If plan is done, return final result
-                if !self.working_memory.has_pending_steps() {
-                    if let Some(final_result) = self.working_memory.final_result() {
-                        let response = final_result.to_string();
-                        self.context.add_turn(query, &response);
-                        self.inner_life.set_free();
-                        return response;
-                    }
-                }
-                // Plan still in progress — return intermediate state
-                let state = self.working_memory.state_summary();
-                self.inner_life.set_free();
-                return format!("thinking... {}", state);
-            }
-        }
+        // Clear any stale working memory plan — each query gets a fresh start.
+        self.working_memory.clear();
 
-        // STEP 2: Try multi-step reasoning — chain recall.
-        // If chain produces 2+ hops, use working memory to execute them.
-        // No keyword matching — the brain discovers structure from its own weights.
-        {
-            let chain = crate::thinking::chain_recall(&self.hdc_memory, query, 5);
-            if chain.len() >= 2 {
-                // Store chain as a plan
-                self.working_memory.clear();
-                self.working_memory.set_plan(chain.clone());
-                // Store the query in register for reference
-                self.working_memory.store("query", query);
-                // Execute first step
-                if let Some(instruction) = self.working_memory.current_instruction() {
-                    let step_result = self.hdc_memory.recall(instruction);
-                    if !step_result.trim().is_empty() {
-                        self.working_memory.complete_step(&step_result);
-                    }
-                }
-                // Return what we have so far
-                let results = self.working_memory.plan_results();
-                if !results.is_empty() {
-                    let response = results.join(". ");
-                    self.context.add_turn(query, &response);
-                    self.inner_life.set_free();
-                    return response;
-                }
-            }
-        }
-
-        // STEP 3: FAST PATH — HDC recall returns immediately if it has an answer.
+        // STEP 1: FAST PATH — HDC recall returns immediately if it has an answer.
         //
         // The spiking network (80M neurons) takes seconds to run. Running it
         // before returning the HDC result causes HTTP timeouts. Instead:
@@ -416,7 +360,7 @@ impl OrganicBrain {
 
         // Fast: attractor memory recall with context
         let (fast_response, _source) = crate::thinking::think(
-            &self.hdc_memory,
+            &mut self.hdc_memory,
             &self.context,
             query,
         );
@@ -486,6 +430,9 @@ impl OrganicBrain {
         self.context.add_turn(input_text, output_text);
 
         let input_pattern = self.encode_to_spikes(input_text);
+        // Output encoding reuses input-sized encoding. Assert they match.
+        debug_assert_eq!(self.input_pop, self.output_pop,
+            "output_pattern assumes input_pop == output_pop");
         let output_pattern = self.encode_to_spikes(output_text);
 
         // Phase 1: Present input — let it propagate (1 tick at 40M scale)
