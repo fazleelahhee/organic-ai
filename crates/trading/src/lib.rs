@@ -39,6 +39,9 @@
 use organic_neuron::brain::OrganicBrain;
 use serde::{Deserialize, Serialize};
 
+pub mod seed;
+pub mod backtest;
+
 /// A discrete news event the brain should consider alongside numeric
 /// market state. The user's core ask: feed the brain Fed announcements,
 /// tweets, geopolitical events, and let it learn how each kind of news
@@ -233,6 +236,40 @@ fn headline_tokens(headline: &str, max_tokens: usize) -> Vec<String> {
         .collect()
 }
 
+/// Derive a categorical "macro regime" tag from RSI, fear-greed, and
+/// volatility. Prepending this to the encoded state lets the brain
+/// learn regime-conditional patterns: "ETF news in regime_euphoric →
+/// sell the news (Down)" vs "ETF news in regime_normal → bullish (Up)".
+/// Without an explicit regime tag, the brain has to learn that
+/// distinction implicitly from feature combinations, which is much
+/// harder with limited training data.
+///
+/// Tags are coarse (~6 categories) so they cluster well in HDC but
+/// don't fragment the training set into too many empty buckets.
+fn regime_tag(state: &MarketState) -> String {
+    // Best-effort lookups — case-insensitive substring match on indicator
+    // names. If a strategy doesn't supply RSI or fear-greed, we still get
+    // a usable tag from volatility alone.
+    let lower_match = |needle: &str| -> Option<f64> {
+        state.indicators.iter()
+            .find(|(n, _)| n.to_lowercase().contains(needle))
+            .map(|(_, v)| *v)
+    };
+    let rsi = lower_match("rsi").unwrap_or(50.0);
+    let fg = lower_match("fear").unwrap_or(0.5);
+    let vol = state.volatility;
+
+    // Order matters — tag the most extreme condition first.
+    let tag = if rsi >= 75.0 && fg >= 0.75 { "euphoric" }
+              else if rsi <= 25.0 && fg <= 0.25 { "capitulation" }
+              else if rsi >= 70.0 { "overbought" }
+              else if rsi <= 35.0 { "oversold" }
+              else if vol > 0.10 { "highvol" }
+              else if vol < 0.025 { "calm" }
+              else { "normal" };
+    format!("regime_{}", tag)
+}
+
 /// The trading reasoner. Owns an OrganicBrain and adds domain-specific
 /// encoding plus a multi-step inference chain.
 pub struct TradingBrain {
@@ -335,9 +372,20 @@ impl TradingBrain {
             if tok.starts_with("v+") || tok.starts_with("v-") { return 3.0; }
             if tok.starts_with("r+") || tok.starts_with("r-") { return 3.0; }
             if tok.starts_with("s+") || tok.starts_with("s-") { return 3.0; }
-            // News content — second-tier signal.
-            if tok.starts_with("src_") || tok.starts_with("w_") { return 2.5; }
-            if tok.starts_with("sent") || tok.starts_with("age") { return 2.0; }
+            // Regime tag (categorical macro regime): strong signal,
+            // groups events by similar market conditions.
+            if tok.starts_with("regime_") { return 2.5; }
+            // News source: medium signal — same vendor often correlates
+            // with similar event types (FED→rates, SEC→regulation).
+            if tok.starts_with("src_") { return 2.0; }
+            // Sentiment + age: mid-tier — sentiment is a real but noisy
+            // signal, age matters for reaction-window analysis.
+            if tok.starts_with("sent") || tok.starts_with("age") { return 1.5; }
+            // Headline content words (`w_*`): weak signal — too event-
+            // specific (each Fed announcement uses different vocabulary).
+            // Kept non-zero so a same-headline pair gets a small boost,
+            // but doesn't dominate similarity computation.
+            if tok.starts_with("w_") { return 0.5; }
             // Time context — lowest weight (intraday seasonality is real
             // but weak compared to price action and news).
             if tok.starts_with("hour+") || tok.starts_with("dow+") { return 1.0; }
@@ -410,6 +458,10 @@ impl TradingBrain {
     /// market data to the brain's text-native interface.
     pub fn encode_state(&self, state: &MarketState) -> String {
         let mut tokens: Vec<String> = Vec::new();
+
+        // Macro regime tag derived from RSI / fear-greed / volatility.
+        // First because it's the highest-level summary of the state.
+        tokens.push(regime_tag(state));
 
         // Numeric market features. Price and volume span decades, so
         // log-magnitude bucketing. Returns, volatility, and indicators
@@ -551,12 +603,12 @@ impl TradingBrain {
             }
         }
 
-        // Anomaly score: average over a fresh probe of the original key.
-        // Process once more (no perturbation) and read the predictor's
-        // current error. Predictive coding has been updating throughout
-        // the passes above, so this is a stabilized reading.
+        // Anomaly score: probe brain on the original key (sets up
+        // predictive-coding error reading), then combine with token
+        // novelty (max_sim against history → 1 - max_sim). Either
+        // signal flagging novelty is enough to raise anomaly.
         let _final_response = self.brain.process(&key);
-        let anomaly = self.brain_anomaly_score();
+        let anomaly = self.anomaly_score(&key);
         steps.push(format!("anomaly:{:.3}", anomaly));
 
         // Pick winning direction; tie or no votes → Flat.
@@ -592,21 +644,55 @@ impl TradingBrain {
             direction
         };
 
-        // Retrieve ALL history matches above a similarity threshold for
-        // outcome-distribution aggregation, then keep only the top K for
-        // display. This separation matters: distribution should reflect
-        // the full base rate of similar past situations (otherwise a
-        // small K introduces recency bias and the empirical probabilities
-        // become non-representative). Display still wants to be terse.
-        let similarity_threshold = 0.5_f32;
-        let mut all_matches: Vec<PatternMatch> = self.history.iter()
-            .map(|(past_key, past_outcome)| PatternMatch {
-                state_key: past_key.clone(),
-                outcome: past_outcome.clone(),
-                similarity: Self::token_similarity(&key, past_key),
-            })
-            .filter(|m| m.similarity >= similarity_threshold)
-            .collect();
+        // STRATIFIED retrieval. The query's regime tag (first token of
+        // the encoded key — e.g. "regime_euphoric") is extracted, and we
+        // first try to match ONLY against history entries with the same
+        // regime tag. This prevents cross-regime contamination: a test
+        // event in regime_euphoric should compare against past euphoric-
+        // regime events even if a normal-regime event happens to share
+        // more news-source tokens. Macro regime conditions a price
+        // reaction more than news category does.
+        //
+        // If no same-regime matches exist, fall back to all-history
+        // similarity above a soft threshold — better to surface
+        // uncertain inferences than to abstain entirely on novel regimes.
+        let query_regime: Option<&str> = key.split_whitespace()
+            .find(|t| t.starts_with("regime_"));
+        let similarity_threshold = 0.15_f32;
+
+        let mut all_matches: Vec<PatternMatch> = if let Some(qr) = query_regime {
+            let same_regime: Vec<PatternMatch> = self.history.iter()
+                .filter(|(past, _)| past.split_whitespace().any(|t| t == qr))
+                .map(|(past_key, past_outcome)| PatternMatch {
+                    state_key: past_key.clone(),
+                    outcome: past_outcome.clone(),
+                    similarity: Self::token_similarity(&key, past_key),
+                })
+                .collect();
+            if !same_regime.is_empty() {
+                steps.push(format!("stratified:regime={},n={}", qr, same_regime.len()));
+                same_regime
+            } else {
+                steps.push(format!("stratified:fallback_no_{}_history", qr));
+                self.history.iter()
+                    .map(|(past_key, past_outcome)| PatternMatch {
+                        state_key: past_key.clone(),
+                        outcome: past_outcome.clone(),
+                        similarity: Self::token_similarity(&key, past_key),
+                    })
+                    .filter(|m| m.similarity >= similarity_threshold)
+                    .collect()
+            }
+        } else {
+            self.history.iter()
+                .map(|(past_key, past_outcome)| PatternMatch {
+                    state_key: past_key.clone(),
+                    outcome: past_outcome.clone(),
+                    similarity: Self::token_similarity(&key, past_key),
+                })
+                .filter(|m| m.similarity >= similarity_threshold)
+                .collect()
+        };
         all_matches.sort_by(|a, b|
             b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -629,7 +715,12 @@ impl TradingBrain {
         // realized history.
         let dist_direction = {
             let d = &outcome_distribution;
-            if d.sample_size >= 3 {
+            // Even a single matched past pattern is informative — a
+            // strict ">= 3" cutoff means novel events with limited
+            // historical coverage default to Flat, which is the wrong
+            // bias for trading (better to surface a tentative call with
+            // appropriate confidence than to abstain entirely).
+            if d.sample_size >= 1 {
                 if d.p_up > d.p_down && d.p_up > d.p_flat { Some(Direction::Up) }
                 else if d.p_down > d.p_up && d.p_down > d.p_flat { Some(Direction::Down) }
                 else if d.p_flat > 0.5 { Some(Direction::Flat) }
@@ -661,18 +752,60 @@ impl TradingBrain {
             steps.push(format!("counter_evidence:n={}", counter_evidence.len()));
         }
 
-        // Counter-evidence confidence penalty: take the empirical
-        // probability of the OPPOSING direction from the outcome
-        // distribution, scale by 0.5, subtract from confidence. A 70/30
-        // split loses up to 15% confidence vs a 95/5 split — the trader
-        // sees genuine uncertainty surfaced in the headline number, not
-        // just buried in counter_evidence.
+        // Confidence blending: combine the brain's vote-derived confidence
+        // (which is zero when the brain stayed silent on novel queries)
+        // with the empirical-distribution confidence (which is grounded
+        // in realized history). For novel events where the brain has no
+        // recall, the distribution is the only signal — using it for
+        // confidence makes the brain's output meaningful even when its
+        // own readout is silent.
+        // Confidence design: empirical agreement signal independent of
+        // anomaly. Anomaly is reported as its own field — caller decides
+        // how to combine. Multiplying confidence by (1-anomaly) here
+        // would double-penalize: novel events would always be low-
+        // confidence regardless of how strongly the matched patterns
+        // agreed, which hides the actual signal.
+        let dist_top_prob = match reasoned_direction {
+            Direction::Up => outcome_distribution.p_up,
+            Direction::Down => outcome_distribution.p_down,
+            Direction::Flat => outcome_distribution.p_flat.max(0.5),
+        };
+
+        // Beta-Bernoulli shrinkage: 5 training matches all agreeing is
+        // not the same as 50 matches all agreeing. Shrink the empirical
+        // probability toward a uniform 1/3 prior with weight α=5
+        // (interpretable as "5 pseudo-observations of uniform outcome").
+        // This prevents pathological confidence=1.00 on a tiny sample.
+        // With many real observations, the shrinkage washes out and the
+        // empirical probability stands.
+        let n = outcome_distribution.sample_size as f32;
+        let shrinkage_alpha = 5.0;
+        let shrunk_top_prob =
+            (dist_top_prob * n + (1.0 / 3.0) * shrinkage_alpha) / (n + shrinkage_alpha);
+
+        let dist_confidence = if outcome_distribution.sample_size >= 1 {
+            shrunk_top_prob
+        } else { 0.0 };
+        steps.push(format!("shrunk_p:{:.2}_n={}", shrunk_top_prob, n));
+        let blended_confidence = if nonempty_passes == 0 {
+            dist_confidence
+        } else {
+            (confidence + dist_confidence) * 0.5
+        };
+        steps.push(format!("dist_conf:{:.2}", dist_confidence));
+
+        // Counter-evidence confidence penalty: subtract a fraction of
+        // the opposing-direction probability. Tuned at 0.3 (was 0.5)
+        // because too-aggressive penalty zeros out the entire signal
+        // for split distributions, which is worse than reporting a
+        // moderate confidence with the split surfaced via
+        // counter_evidence and outcome_distribution fields.
         let opposing_p = match reasoned_direction {
             Direction::Up => outcome_distribution.p_down,
             Direction::Down => outcome_distribution.p_up,
             Direction::Flat => outcome_distribution.p_up.max(outcome_distribution.p_down),
         };
-        let confidence = (confidence - opposing_p * 0.5).clamp(0.0, 1.0);
+        let confidence = (blended_confidence - opposing_p * 0.3).clamp(0.0, 1.0);
         steps.push(format!("opposing_p:{:.2}", opposing_p));
 
         Analysis {
@@ -686,16 +819,31 @@ impl TradingBrain {
         }
     }
 
-    /// Read the brain's current input→hidden prediction error and
-    /// normalize into [0, 1]. The raw error is unbounded; we map via a
-    /// sigmoid so the anomaly score is comparable across calls and
-    /// strategies.
-    fn brain_anomaly_score(&self) -> f32 {
+    /// Combined anomaly score in [0, 1]. Two components:
+    ///
+    /// 1. **Predictive-coding error** from the brain's input→hidden
+    ///    predictor. Goes high when the spike pattern is unfamiliar to
+    ///    the predictor's learned weights.
+    ///
+    /// 2. **Token novelty** = `1 - max_similarity_to_history`. Goes
+    ///    high when no past pattern shares enough features with the
+    ///    query. This differentiates events the predictive coder can't —
+    ///    a partially-trained predictor often has near-zero error on
+    ///    inputs it has technically never seen, so the second component
+    ///    is critical for usable anomaly detection on novel events.
+    ///
+    /// Combined as max() so EITHER signal flagging novelty is enough to
+    /// raise the alarm. A trader receiving this score is best served by
+    /// a high recall on novelty, not optimization for false-positive
+    /// minimization.
+    fn anomaly_score(&self, query_key: &str) -> f32 {
         let raw = self.brain.input_to_hidden_prediction_error();
-        // Sigmoid centered at 1.0 (typical baseline for partially-trained
-        // predictor). Scores cluster near 0.5 for "normal" states and
-        // approach 1.0 only for genuinely novel ones.
-        1.0 / (1.0 + (-(raw - 1.0)).exp())
+        let pred_anomaly = 1.0 / (1.0 + (-(raw - 1.0)).exp());
+        let max_sim = self.history.iter()
+            .map(|(past, _)| Self::token_similarity(query_key, past))
+            .fold(0.0_f32, f32::max);
+        let novelty = (1.0 - max_sim).clamp(0.0, 1.0);
+        pred_anomaly.max(novelty)
     }
 
     /// Generate `n` perturbed variants of the encoded state by rotating
