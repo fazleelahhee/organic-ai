@@ -1,0 +1,8 @@
+[package]
+name = "organic-trading"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+organic-neuron = { path = "../neuron" }
+serde = { version = "1", features = ["derive"] }

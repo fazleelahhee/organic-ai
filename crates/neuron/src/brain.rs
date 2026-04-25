@@ -1082,6 +1082,23 @@ impl OrganicBrain {
         self.total_training >= 1
     }
 
+    /// Read-only accessor for the input→hidden predictive-coding error.
+    /// Used by downstream reasoners (e.g. `organic-trading`) as an
+    /// anomaly / familiarity signal — high error = the brain has weak
+    /// coverage on this kind of input.
+    pub fn input_to_hidden_prediction_error(&self) -> f32 {
+        self.pred_input_to_hidden.prediction_error
+    }
+
+    /// Read-only accessor for HDC recall — given a query, returns the
+    /// stored value associated with the nearest-neighbor key (or empty
+    /// string if no match). Exposed for reasoners that want to consult
+    /// the brain's pattern memory directly without going through the
+    /// full process() pipeline.
+    pub fn recall_pattern(&mut self, query: &str) -> String {
+        self.hdc_memory.recall(query)
+    }
+
     /// Get statistics about the brain's state.
     pub fn stats(&self) -> BrainStats {
         let total_synapses: usize = self.neurons.iter().map(|n| n.synapses.len()).sum();
