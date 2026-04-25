@@ -196,7 +196,7 @@ impl HDCMemory {
 
         for (key_vec, value, _) in &self.items {
             let sim = query_vec.similarity(key_vec);
-            if sim > best_sim && sim > 0.15 {
+            if sim > best_sim && sim > 0.4 {
                 best_sim = sim;
                 best_val = value.clone();
             }
@@ -227,7 +227,7 @@ impl HDCMemory {
 
         for (key_vec, value, _) in &self.items {
             let sim = query.similarity(key_vec);
-            if sim > best_sim && sim > 0.15 {
+            if sim > best_sim && sim > 0.4 {
                 best_sim = sim;
                 best_val = value.clone();
             }
