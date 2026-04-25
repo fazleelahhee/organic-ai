@@ -371,6 +371,57 @@ impl OrganicBrain {
         target
     }
 
+    /// Encode the *next character to generate* as a one-hot target in the
+    /// LSM's first position slot — autoregressive training. The LSM's
+    /// output[0..95] is treated as the next-character distribution; all
+    /// other slots are zero. Used by autoregressive train(): for each
+    /// output character, the brain is taught "given current hidden state,
+    /// the next char is X."
+    fn encode_next_char_target(&self, byte: u8) -> Vec<f32> {
+        use crate::lsm::{CHARS_PER_POSITION, OUTPUT_DIM};
+        let mut target = vec![0.0f32; OUTPUT_DIM];
+        if byte >= 32 && byte < 127 {
+            let char_idx = (byte - 32) as usize;
+            if char_idx < CHARS_PER_POSITION { target[char_idx] = 1.0; }
+        }
+        target
+    }
+
+    /// Decode the next-character argmax from the LSM's first position slot.
+    /// Returns Some((byte, confidence)) if confidence exceeds threshold,
+    /// else None. Used by autoregressive process(): each generation step
+    /// consults the LSM to pick the next character to emit.
+    fn decode_next_char(&self) -> Option<(u8, f32)> {
+        use crate::lsm::CHARS_PER_POSITION;
+        let hidden_slice = &self.neurons[self.input_pop..self.input_pop + self.hidden_pop];
+        let state = self.lsm_readout.collect_state(hidden_slice);
+        let projected = self.lsm_readout.forward(&state);
+        if projected.len() < CHARS_PER_POSITION { return None; }
+        let chunk = &projected[0..CHARS_PER_POSITION];
+        let (best_idx, &best_val) = chunk.iter().enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+        if best_val < 0.55 { return None; }
+        let byte = best_idx as u8 + 32;
+        if byte >= 32 && byte < 127 { Some((byte, best_val)) } else { None }
+    }
+
+    /// Encode a single character at a given output position into an input
+    /// frame. Used by autoregressive feedback: each generated char is
+    /// re-injected as a new input frame so the brain conditions the next
+    /// character on what it just emitted. Position offset shifts the hash
+    /// so each emitted char fires distinct input neurons.
+    fn encode_char_frame(&self, byte: u8, pos: usize) -> Vec<f32> {
+        let mut frame = vec![0.0f32; self.input_pop];
+        if byte >= 32 && byte < 127 {
+            let b = byte as usize;
+            let idx1 = (b * 127 + pos * 251) % self.input_pop;
+            let idx2 = (b * 67 + pos * 139) % self.input_pop;
+            frame[idx1] = 1.0;
+            frame[idx2] = 0.7;
+        }
+        frame
+    }
+
     /// Decode the LSM readout's projection back to text. Per position, take
     /// the argmax over the 95-char slot. If the winning value is below a
     /// confidence threshold, treat that position as empty and stop —
@@ -423,6 +474,59 @@ impl OrganicBrain {
             }
         }
         pattern
+    }
+
+    /// Autoregressive LSM training: teach the brain to predict each output
+    /// character one at a time, conditioned on hidden state that has seen
+    /// (a) the input AND (b) all previously-emitted characters of the
+    /// answer. This is the LLM-style compositional output objective —
+    /// instead of "given hidden, predict whole answer in parallel" (which
+    /// has no compositional structure), it's "given hidden, predict NEXT
+    /// char; then condition on that char and predict the one after."
+    ///
+    /// Steps:
+    /// 1. Reset volatile state (clean trial).
+    /// 2. Stream input frames so hidden activity reflects the question.
+    /// 3. For each target output character at position p:
+    ///    a. Sample hidden state.
+    ///    b. Delta-rule update LSM toward "next char = target[p]" target
+    ///       (one-hot in the first 95-dim slot of the LSM output).
+    ///    c. Feed that character back as a new input frame; run a few
+    ///       ticks so hidden state advances to reflect the emission.
+    /// Surprise scales the number of delta-rule passes per char.
+    fn train_autoregressive(&mut self, input_text: &str, output_text: &str, surprise: f32) {
+        // Reset volatile state for a clean autoregressive trial.
+        for n in &mut self.neurons {
+            n.potential = 0.0;
+            n.fired = false;
+            n.spike_history = [false; SPIKE_HISTORY_LEN];
+            n.history_idx = 0;
+        }
+
+        // Stream input frames so hidden activity reflects the question
+        // before we start training next-char predictions.
+        let input_frames = self.encode_temporal(input_text, 3);
+        let warmup = input_frames.len() + 2;
+        self.run_ticks_temporal(&input_frames, warmup, false, None);
+
+        let passes = if surprise > 0.5 { 4 } else if surprise > 0.1 { 2 } else { 1 };
+        let bytes: Vec<u8> = output_text.bytes().collect();
+
+        for (pos, &byte) in bytes.iter().enumerate() {
+            // Sample hidden state and train LSM to predict THIS char next.
+            let hidden_slice = &self.neurons[self.input_pop..self.input_pop + self.hidden_pop];
+            let state = self.lsm_readout.collect_state(hidden_slice);
+            let target = self.encode_next_char_target(byte);
+            for _ in 0..passes {
+                self.lsm_readout.train(&state, &target);
+            }
+
+            // Feed the just-trained character back as input — autoregressive
+            // teacher-forcing. The next iteration's hidden state will reflect
+            // having seen this char, conditioning the next-char prediction.
+            let frame = self.encode_char_frame(byte, input_text.len() + pos);
+            self.run_ticks_temporal(&[frame], 2, false, None);
+        }
     }
 
     /// Train the spiking network on an (input_frames, target_output) pair via
@@ -846,11 +950,34 @@ impl OrganicBrain {
             }
         }
 
-        // Total ticks = frames.len() (one full pass of the input) + 8 tail
-        // ticks for recurrent dynamics to integrate the sequence into a
-        // sustained pattern that the readout can decode.
-        let n_ticks = frames.len() + 8;
-        self.run_ticks_temporal(&frames, n_ticks, false, None);
+        // INPUT PHASE: stream the query frames so the brain reads the
+        // question character-by-character. A short tail lets recurrent
+        // dynamics integrate before generation begins.
+        let n_input_ticks = frames.len() + 4;
+        self.run_ticks_temporal(&frames, n_input_ticks, false, None);
+
+        // GENERATION PHASE: autoregressively decode characters. Each step
+        // consults the LSM for the most-likely next char; if confident,
+        // emits it AND feeds it back as the next input frame so the brain
+        // conditions the next character on its own previous output. This
+        // is the compositional output primitive — the same mechanism that
+        // makes transformer LLMs good at composition. Stops when the LSM
+        // is no longer confident (low confidence = "don't know what comes
+        // next", which is the brain's natural way to indicate end).
+        let mut generated = String::new();
+        let max_gen_len = 12;
+        let ticks_per_gen_step = 3;
+        let input_text_len = query.len();
+        for step in 0..max_gen_len {
+            match self.decode_next_char() {
+                Some((byte, _conf)) => {
+                    generated.push(byte as char);
+                    let feedback = self.encode_char_frame(byte, input_text_len + step);
+                    self.run_ticks_temporal(&[feedback], ticks_per_gen_step, false, None);
+                }
+                None => break,
+            }
+        }
 
         // Snapshot hidden state into working memory before decoding.
         // Hidden is where the brain's "thought" is — output neurons fire only
@@ -864,19 +991,13 @@ impl OrganicBrain {
         );
         self.working_memory.store_vector(&context_snapshot);
 
-        // Decode: prefer the trained LSM readout (high resolution, learned
-        // hidden→text mapping). Fall back to the coarse rate-chunk decoder
-        // only if LSM produces nothing — this happens early in training
-        // before the readout has learned its weights.
-        let lsm_response = self.decode_via_lsm();
-        let deep_response = if !lsm_response.is_empty() {
-            lsm_response
-        } else {
-            self.decode_from_rates()
-        };
-
-        let response = if !deep_response.is_empty() && deep_response.chars().any(|c| c.is_alphanumeric()) {
-            deep_response
+        // The autoregressively-generated string is our deep response.
+        // If generation produced nothing or only whitespace, return empty
+        // so the server falls back to Claude — same protocol as before.
+        let response = if !generated.is_empty()
+            && generated.chars().any(|c| !c.is_whitespace())
+        {
+            generated.trim().to_string()
         } else {
             self.inner_life.set_free();
             return String::new();
@@ -922,21 +1043,15 @@ impl OrganicBrain {
         let target = self.encode_output_target(output_text);
         self.train_spiking(&frames, &target, n_ticks);
 
-        // Channel 3: LSM readout — learned position-conditioned char classifier
-        // over hidden firing rates. After train_spiking, hidden state reflects
-        // the input being processed (with clamped outputs reinforcing it).
-        // We train the LSM to map this hidden state to a one-hot target text,
-        // giving us a high-resolution decoder that doesn't suffer from the
-        // 5-level coarseness of the chunk-of-4 avg-rate scheme.
-        let lsm_target = self.encode_lsm_target(output_text);
-        let hidden_slice = &self.neurons[self.input_pop..self.input_pop + self.hidden_pop];
-        let lsm_state = self.lsm_readout.collect_state(hidden_slice);
-        // A few delta-rule passes per training call — same "rehearse harder
-        // when surprised" pattern as STDP.
-        let lsm_passes = if surprise > 0.5 { 4 } else if surprise > 0.1 { 2 } else { 1 };
-        for _ in 0..lsm_passes {
-            self.lsm_readout.train(&lsm_state, &lsm_target);
-        }
+        // Channel 3: AUTOREGRESSIVE LSM training. The LSM is now used as a
+        // next-character predictor (output[0..95] = distribution over the
+        // next char). Train char-by-char: reset state, run input frames,
+        // then for each output char, train the LSM to predict THAT char
+        // given the current hidden state, AND feed the char back as the
+        // next input frame so the next training step's hidden state is
+        // conditioned on what was just emitted. Same mechanism transformer
+        // LLMs use to learn compositional output structure.
+        self.train_autoregressive(input_text, output_text, surprise);
 
         // Record in context
         self.context.add_turn(input_text, output_text);
