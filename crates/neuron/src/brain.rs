@@ -426,99 +426,30 @@ impl OrganicBrain {
     /// This is genuine associative learning — pairing input with output
     /// and letting spike timing do the wiring.
     pub fn train(&mut self, input_text: &str, output_text: &str) {
-        // Record in context
-        self.context.add_turn(input_text, output_text);
+        // FAST training — HDC storage is instant (<1ms).
+        // Spiking network trains during idle ticks, not here.
+        // This prevents blocking the server for seconds during training.
 
-        let input_pattern = self.encode_to_spikes(input_text);
-        // Output encoding reuses input-sized encoding. Assert they match.
-        debug_assert_eq!(self.input_pop, self.output_pop,
-            "output_pattern assumes input_pop == output_pop");
-        let output_pattern = self.encode_to_spikes(output_text);
-
-        // Phase 1: Present input — let it propagate (1 tick at 40M scale)
-        self.run_ticks(&input_pattern, 1, true);
-
-        // --- Predictive coding: input → hidden ---
-        let input_rates: Vec<f32> = self.neurons[0..self.input_pop]
-            .iter()
-            .map(|n| n.firing_rate())
-            .collect();
-        let hidden_rates: Vec<f32> = self.neurons[self.input_pop..self.input_pop + self.hidden_pop]
-            .iter()
-            .map(|n| n.firing_rate())
-            .collect();
-        let comp_input = self.pred_input_to_hidden.compress(&input_rates, 0);
-        let comp_hidden = self.pred_input_to_hidden.compress(&hidden_rates, 0);
-        let _pred_err_1 = self.pred_input_to_hidden.update(&comp_input, &comp_hidden);
-
-        // Phase 2: Clamp output neurons to desired pattern — STDP wires them
-        let output_start = self.input_pop + self.hidden_pop;
-        for i in 0..self.output_pop {
-            let target_rate = output_pattern.get(i).copied().unwrap_or(0.0);
-            if target_rate > 0.3 {
-                self.neurons[output_start + i].potential = self.lif_params.threshold + 0.1;
-            }
-        }
-        self.run_ticks(&input_pattern, 1, true);
-
-        // --- Predictive coding: hidden → output ---
-        let hidden_rates2: Vec<f32> = self.neurons[self.input_pop..self.input_pop + self.hidden_pop]
-            .iter()
-            .map(|n| n.firing_rate())
-            .collect();
-        let output_rates: Vec<f32> = self.neurons[output_start..output_start + self.output_pop]
-            .iter()
-            .map(|n| n.firing_rate())
-            .collect();
-        let comp_hidden2 = self.pred_hidden_to_output.compress(&hidden_rates2, 0);
-        let comp_output = self.pred_hidden_to_output.compress(&output_rates, 0);
-        let _pred_err_2 = self.pred_hidden_to_output.update(&comp_hidden2, &comp_output);
-
-        // --- Replace fake surprise with genuine prediction error ---
+        // Compute surprise: does the brain already know this?
         let predicted = self.hdc_memory.recall(input_text);
         let predicted_vec = self.hdc_memory.encode(&predicted);
         let actual_vec = self.hdc_memory.encode(output_text);
-        let hdc_error = crate::curiosity::compute_hdc_prediction_error(
+        let surprise = crate::curiosity::compute_hdc_prediction_error(
             predicted_vec.similarity(&actual_vec),
         );
-        let coding_error = (self.pred_input_to_hidden.prediction_error
-            + self.pred_hidden_to_output.prediction_error)
-            / 2.0;
-        let surprise = crate::curiosity::compute_combined_error(hdc_error, coding_error, 0.6);
 
-        // Use the genuine surprise to gate HDC storage
+        // Store in HDC memory if surprising (novel information)
         if surprise > 0.1 {
             self.hdc_memory.store(input_text, output_text);
         }
+
+        // Record in context
+        self.context.add_turn(input_text, output_text);
 
         // Feed inner life — surprising inputs drive more daydreaming
         if surprise > 0.3 {
             self.inner_life.record_interaction(input_text);
         }
-
-        // --- Train LSM readout ---
-        {
-            let hidden_slice = &self.neurons[self.input_pop..self.input_pop + self.hidden_pop];
-            let lsm_state = self.lsm_readout.collect_state(hidden_slice);
-            // Target: compressed output rates
-            let target = self.pred_hidden_to_output.compress(&output_rates, 0);
-            // Pad/truncate target to 1024 for the readout
-            let mut target_1024 = vec![0.0f32; 1024];
-            for (i, v) in target.iter().enumerate() {
-                if i < 1024 {
-                    target_1024[i] = *v;
-                }
-            }
-            self.lsm_readout.train(&lsm_state, &target_1024);
-        }
-
-        // --- Train attention ---
-        self.attention.learn(
-            &input_pattern,
-            &hidden_rates2,
-            surprise,
-            self.hidden_pop,
-        );
 
         self.total_training += 1;
     }
@@ -626,12 +557,11 @@ mod tests {
     }
 
     #[test]
-    fn test_training_changes_weights() {
+    fn test_training_stores_in_hdc() {
         let mut brain = test_brain();
-        let w_before: f32 = brain.neurons.iter().flat_map(|n| n.synapses.iter().map(|s| s.weight)).sum();
-        for _ in 0..10 { brain.train("2+3", "5"); }
-        let w_after: f32 = brain.neurons.iter().flat_map(|n| n.synapses.iter().map(|s| s.weight)).sum();
-        assert_ne!(w_before, w_after, "Training must change weights via STDP");
+        assert_eq!(brain.hdc_memory.size(), 0);
+        brain.train("2+3", "5");
+        assert!(brain.hdc_memory.size() > 0, "Training must store in HDC memory");
     }
 
     #[test]

@@ -69,7 +69,7 @@ async fn main() {
                     };
 
                     let _ = req.response_tx.send(response.clone());
-                    println!("  → {}", source);
+                    println!("  → {} | len={} | {:?}", source, response.len(), &response[..response.len().min(50)]);
 
                     // Only train when Claude teaches — don't overwrite brain's own answers.
                     if source == "claude" {
