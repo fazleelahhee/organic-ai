@@ -145,12 +145,8 @@ pub fn think(
         return (direct_raw, "recall");
     }
 
-    // Step 2: Build contextual cue and try recall with context
-    let contextual_cue = context.contextualize(question);
-    let direct = memory.recall(&contextual_cue);
-    if !direct.trim().is_empty() {
-        return (direct, "recall+context");
-    }
+    // Context is tracked but not used for recall — it causes cross-contamination.
+    // Future: use context for pronoun resolution, not direct recall.
 
     // Step 4: Reasoning — chain recalls
     let chain = chain_recall(memory, question, 3);
@@ -223,16 +219,15 @@ mod tests {
     }
 
     #[test]
-    fn test_think_with_context() {
+    fn test_think_no_cross_contamination() {
         let mut mem = HDCMemory::new();
-        mem.store("Japan", "Tokyo");
-        // Store with context pattern too
-        let q = "Japan Tokyo what country is that in";
-        mem.store(q, "Japan is the country");
-        let mut ctx = ConversationContext::new(5);
-        ctx.add_turn("Japan", "Tokyo");
-        let (response, source) = think(&mut mem, &ctx, "what country is that in");
-        assert!(!response.is_empty());
+        mem.store("What is the capital of Japan?", "Tokyo");
+        mem.store("Who wrote Hamlet?", "Shakespeare");
+        let ctx = ConversationContext::new(5);
+        let (r1, _) = think(&mut mem, &ctx, "What is the capital of Japan?");
+        assert_eq!(r1, "Tokyo");
+        let (r2, _) = think(&mut mem, &ctx, "Who wrote Hamlet?");
+        assert_eq!(r2, "Shakespeare");
     }
 
     #[test]
