@@ -25,7 +25,7 @@ const SPIKE_HISTORY_LEN: usize = 8;
 
 /// A synapse in the brain — an incoming connection from source to this neuron.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BrainSynapse {
+pub(crate) struct BrainSynapse {
     source: u32,
     weight: f32,
     last_pre_tick: u64,
@@ -34,13 +34,13 @@ struct BrainSynapse {
 
 /// A single neuron in the brain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BrainNeuron {
-    potential: f32,
-    fired: bool,
-    last_fire_tick: u64,
-    spike_history: [bool; SPIKE_HISTORY_LEN], // circular buffer of recent spikes
-    history_idx: usize,
-    synapses: Vec<BrainSynapse>,
+pub(crate) struct BrainNeuron {
+    pub(crate) potential: f32,
+    pub(crate) fired: bool,
+    pub(crate) last_fire_tick: u64,
+    pub(crate) spike_history: [bool; SPIKE_HISTORY_LEN], // circular buffer of recent spikes
+    pub(crate) history_idx: usize,
+    pub(crate) synapses: Vec<BrainSynapse>,
 }
 
 impl BrainNeuron {
@@ -56,7 +56,7 @@ impl BrainNeuron {
     }
 
     /// Firing rate over recent history (0.0 to 1.0)
-    fn firing_rate(&self) -> f32 {
+    pub(crate) fn firing_rate(&self) -> f32 {
         let count = self.spike_history.iter().filter(|&&s| s).count();
         count as f32 / SPIKE_HISTORY_LEN as f32
     }
@@ -87,6 +87,14 @@ pub struct OrganicBrain {
     pub inner_life: crate::inner_life::InnerLife,
     /// Working memory — hold intermediate values, execute step-by-step plans.
     pub working_memory: crate::working_memory::WorkingMemory,
+    /// LSM readout — taps reservoir firing rates into a learned projection.
+    lsm_readout: crate::lsm::LsmReadout,
+    /// Predictive coding: input → hidden prediction.
+    pred_input_to_hidden: crate::predictive::PredictionLayer,
+    /// Predictive coding: hidden → output prediction.
+    pred_hidden_to_output: crate::predictive::PredictionLayer,
+    /// Attention — gain modulation on hidden population.
+    attention: crate::attention::AttentionModule,
     tick: u64,
     pub total_queries: u64,
     pub total_training: u64,
@@ -186,6 +194,10 @@ impl OrganicBrain {
             context: crate::thinking::ConversationContext::new(5),
             inner_life: crate::inner_life::InnerLife::new(),
             working_memory: crate::working_memory::WorkingMemory::new(),
+            lsm_readout: crate::lsm::LsmReadout::new(hidden_pop, 42),
+            pred_input_to_hidden: crate::predictive::PredictionLayer::new(),
+            pred_hidden_to_output: crate::predictive::PredictionLayer::new(),
+            attention: crate::attention::AttentionModule::new(input_pop, hidden_pop, 42),
             tick: 0,
             total_queries: 0,
             total_training: 0,
@@ -423,12 +435,8 @@ impl OrganicBrain {
         }
 
         // If fast recall found something, PRIME the spiking network with it.
-        // This seeds the neural dynamics with the recall — like how reading
-        // a word activates related neural patterns in the brain.
         if !fast_response.is_empty() {
             let prime = self.encode_to_spikes(&fast_response);
-            // Inject prime into hidden layer — biases the network toward
-            // the recalled content, but lets dynamics explore around it
             for i in 0..self.hidden_pop.min(prime.len()) {
                 let h = self.input_pop + i;
                 if h < self.neurons.len() {
@@ -437,7 +445,31 @@ impl OrganicBrain {
             }
         }
 
+        // --- Attention gain modulation (before dynamics) ---
+        {
+            let hidden_rates: Vec<f32> = self.neurons[self.input_pop..self.input_pop + self.hidden_pop]
+                .iter()
+                .map(|n| n.firing_rate())
+                .collect();
+            let gains = self.attention.compute_gains(&input, &hidden_rates, self.hidden_pop);
+            for (i, &g) in gains.iter().enumerate() {
+                let h = self.input_pop + i;
+                if h < self.neurons.len() {
+                    self.neurons[h].potential *= g;
+                }
+            }
+        }
+
         self.run_ticks(&input, 2, false);
+
+        // --- LSM readout (after dynamics) ---
+        {
+            let hidden_slice = &self.neurons[self.input_pop..self.input_pop + self.hidden_pop];
+            let lsm_state = self.lsm_readout.collect_state(hidden_slice);
+            let _lsm_out = self.lsm_readout.forward(&lsm_state);
+            // lsm_out available for future downstream use
+        }
+
         let deep_response = self.decode_from_rates();
 
         // Combine: prefer fast recall (it's more reliable), but use deep
@@ -462,25 +494,6 @@ impl OrganicBrain {
     /// This is genuine associative learning — pairing input with output
     /// and letting spike timing do the wiring.
     pub fn train(&mut self, input_text: &str, output_text: &str) {
-        // Compute surprise — how different is this from what the brain expected?
-        let predicted = self.hdc_memory.recall(input_text);
-        let surprise = crate::curiosity::compute_information_gain(
-            predicted.len() as f32 / 100.0,  // rough measure of prediction
-            output_text.len() as f32 / 100.0, // rough measure of actual
-        );
-
-        // Store in attractor memory (Hebbian weight update)
-        // High surprise → brain learns strongly (novel information)
-        // Low surprise → brain already knew this (minimal update)
-        if surprise > 0.1 {
-            self.hdc_memory.store(input_text, output_text);
-        }
-
-        // Feed inner life — surprising inputs drive more daydreaming
-        if surprise > 0.3 {
-            self.inner_life.record_interaction(input_text);
-        }
-
         // Record in context
         self.context.add_turn(input_text, output_text);
 
@@ -489,6 +502,19 @@ impl OrganicBrain {
 
         // Phase 1: Present input — let it propagate (1 tick at 40M scale)
         self.run_ticks(&input_pattern, 1, true);
+
+        // --- Predictive coding: input → hidden ---
+        let input_rates: Vec<f32> = self.neurons[0..self.input_pop]
+            .iter()
+            .map(|n| n.firing_rate())
+            .collect();
+        let hidden_rates: Vec<f32> = self.neurons[self.input_pop..self.input_pop + self.hidden_pop]
+            .iter()
+            .map(|n| n.firing_rate())
+            .collect();
+        let comp_input = self.pred_input_to_hidden.compress(&input_rates, 0);
+        let comp_hidden = self.pred_input_to_hidden.compress(&hidden_rates, 0);
+        let _pred_err_1 = self.pred_input_to_hidden.update(&comp_input, &comp_hidden);
 
         // Phase 2: Clamp output neurons to desired pattern — STDP wires them
         let output_start = self.input_pop + self.hidden_pop;
@@ -499,6 +525,65 @@ impl OrganicBrain {
             }
         }
         self.run_ticks(&input_pattern, 1, true);
+
+        // --- Predictive coding: hidden → output ---
+        let hidden_rates2: Vec<f32> = self.neurons[self.input_pop..self.input_pop + self.hidden_pop]
+            .iter()
+            .map(|n| n.firing_rate())
+            .collect();
+        let output_rates: Vec<f32> = self.neurons[output_start..output_start + self.output_pop]
+            .iter()
+            .map(|n| n.firing_rate())
+            .collect();
+        let comp_hidden2 = self.pred_hidden_to_output.compress(&hidden_rates2, 0);
+        let comp_output = self.pred_hidden_to_output.compress(&output_rates, 0);
+        let _pred_err_2 = self.pred_hidden_to_output.update(&comp_hidden2, &comp_output);
+
+        // --- Replace fake surprise with genuine prediction error ---
+        let predicted = self.hdc_memory.recall(input_text);
+        let predicted_vec = self.hdc_memory.encode(&predicted);
+        let actual_vec = self.hdc_memory.encode(output_text);
+        let hdc_error = crate::curiosity::compute_hdc_prediction_error(
+            predicted_vec.similarity(&actual_vec),
+        );
+        let coding_error = (self.pred_input_to_hidden.prediction_error
+            + self.pred_hidden_to_output.prediction_error)
+            / 2.0;
+        let surprise = crate::curiosity::compute_combined_error(hdc_error, coding_error, 0.6);
+
+        // Use the genuine surprise to gate HDC storage
+        if surprise > 0.1 {
+            self.hdc_memory.store(input_text, output_text);
+        }
+
+        // Feed inner life — surprising inputs drive more daydreaming
+        if surprise > 0.3 {
+            self.inner_life.record_interaction(input_text);
+        }
+
+        // --- Train LSM readout ---
+        {
+            let hidden_slice = &self.neurons[self.input_pop..self.input_pop + self.hidden_pop];
+            let lsm_state = self.lsm_readout.collect_state(hidden_slice);
+            // Target: compressed output rates
+            let target = self.pred_hidden_to_output.compress(&output_rates, 0);
+            // Pad/truncate target to 1024 for the readout
+            let mut target_1024 = vec![0.0f32; 1024];
+            for (i, v) in target.iter().enumerate() {
+                if i < 1024 {
+                    target_1024[i] = *v;
+                }
+            }
+            self.lsm_readout.train(&lsm_state, &target_1024);
+        }
+
+        // --- Train attention ---
+        self.attention.learn(
+            &input_pattern,
+            &hidden_rates2,
+            surprise,
+            self.hidden_pop,
+        );
 
         self.total_training += 1;
     }

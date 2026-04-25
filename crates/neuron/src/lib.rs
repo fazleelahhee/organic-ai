@@ -8,5 +8,8 @@ pub mod ring;       // NumberRing — ring attractor for organic math
 pub mod memory;     // AttractorMemory — Hopfield attractor memory (legacy)
 pub mod hdc;        // Hyperdimensional Computing — 10,000x capacity, compositional, one-shot
 pub mod thinking;   // Reasoning, context, creativity — through Hebbian dynamics
+pub mod lsm;        // Liquid State Machine — readout from spiking reservoir
+pub mod predictive; // Predictive coding — free-energy prediction error
+pub mod attention;  // Gain modulation — organic attention
 pub mod inner_life;     // The brain thinks for itself — daydreaming, wondering, discovering
 pub mod working_memory; // Prefrontal cortex — hold values, plan steps, execute sequences
