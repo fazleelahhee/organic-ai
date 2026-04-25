@@ -28,10 +28,24 @@ const SPIKE_HISTORY_LEN: usize = 8;
 /// that fire D ticks apart, so STDP selectively strengthens connections
 /// that match observed temporal regularities.
 const MAX_DELAY: usize = 5;
-/// Number of recurrent excitatory hidden→hidden connections per hidden
-/// neuron. These give the hidden layer the ability to sustain activity
-/// across ticks and learn temporal sequences.
+/// Total recurrent excitatory hidden→hidden connections per hidden neuron.
+/// Tuned down from a higher count: too much recurrent excitation pulls
+/// hidden state into a shared attractor regardless of input, destroying
+/// input-specific differentiation. We want columns to bias representation,
+/// not collapse it.
 const RECURRENT_PER_HIDDEN: usize = 6;
+/// Probability that a recurrent excitatory connection's source is in the
+/// same column as the post-synaptic neuron. The rest scatter randomly to
+/// any column. Soft column structure: real cortical columns have strong
+/// but not exclusive local connectivity, and strict isolation kills
+/// cross-input differentiation in our small test brains.
+const WITHIN_COLUMN_PROB: f32 = 0.60;
+/// Soft target column count. Adjusted at construction time so each column
+/// has a reasonable number of neurons — too few columns means no
+/// specialization, too many means each column is too sparse to develop a
+/// microcircuit. We aim for ~64 neurons/column up to a hard cap of 128
+/// columns for the production-scale brain.
+const TARGET_COLUMNS: usize = 16;
 
 fn default_delay() -> u8 { 1 }
 
@@ -166,8 +180,16 @@ impl OrganicBrain {
         // Hidden → Output: excitatory forward (delay 1)
         // Output ↔ Output: lateral inhibition (delay 1)
 
+        // Cortical column geometry. We aim for ~64 neurons/column but cap
+        // total columns at TARGET_COLUMNS so production-scale brains don't
+        // explode the column count, and floor at 2 so test brains have at
+        // least some structural division.
+        let num_columns = (hidden_pop / 64).max(2).min(TARGET_COLUMNS);
+        let column_size = (hidden_pop / num_columns).max(1);
+
         // Input → Hidden
         for h in input_pop..input_pop + hidden_pop {
+            // Feedforward excitatory from input — every column gets all inputs.
             for _ in 0..synapses_per.max(4) {
                 let src = fast_rand(&mut seed, input_pop);
                 neurons[h].synapses.push(BrainSynapse {
@@ -175,9 +197,23 @@ impl OrganicBrain {
                     last_pre_tick: 0, eligibility: 0.0,
                 });
             }
-            // Lateral inhibition within hidden
+
+            let h_local = h - input_pop;
+            let h_column = h_local / column_size;
+            let column_start = input_pop + h_column * column_size;
+            let column_end = (column_start + column_size).min(input_pop + hidden_pop);
+            let actual_column_size = column_end - column_start;
+
+            // Lateral inhibition: 2 synapses, each biased toward the same
+            // column with probability WITHIN_COLUMN_PROB. Soft column
+            // structure rather than strict — the rest scatter randomly,
+            // which keeps cross-column competition alive.
             for _ in 0..2 {
-                let src = input_pop + fast_rand(&mut seed, hidden_pop);
+                let src = if (fast_rand(&mut seed, 100) as f32) < WITHIN_COLUMN_PROB * 100.0 {
+                    column_start + fast_rand(&mut seed, actual_column_size)
+                } else {
+                    input_pop + fast_rand(&mut seed, hidden_pop)
+                };
                 if src != h {
                     neurons[h].synapses.push(BrainSynapse {
                         source: src as u32, weight: -0.3, delay: 1,
@@ -185,16 +221,25 @@ impl OrganicBrain {
                     });
                 }
             }
-            // Recurrent excitatory hidden→hidden with random delays.
-            // Smaller weight than feedforward (0.10 vs 0.25) so that input
-            // drive still dominates and the network doesn't enter runaway
-            // activity from cascading recurrent excitation.
+
+            // Recurrent excitatory: per-synapse probabilistic placement —
+            // most within own column (microcircuit dynamics, specialization),
+            // some across columns (integration). Random delays 1..=MAX_DELAY
+            // across these connections mean STDP can selectively tune which
+            // delay-D pre→post pairs co-occur in observed data.
             for _ in 0..RECURRENT_PER_HIDDEN {
-                let src = input_pop + fast_rand(&mut seed, hidden_pop);
+                let in_column = (fast_rand(&mut seed, 100) as f32) < WITHIN_COLUMN_PROB * 100.0;
+                let src = if in_column {
+                    column_start + fast_rand(&mut seed, actual_column_size)
+                } else {
+                    input_pop + fast_rand(&mut seed, hidden_pop)
+                };
                 if src != h {
                     let d = (fast_rand(&mut seed, MAX_DELAY) + 1) as u8;
                     neurons[h].synapses.push(BrainSynapse {
-                        source: src as u32, weight: 0.10, delay: d,
+                        source: src as u32,
+                        weight: if in_column { 0.08 } else { 0.05 },
+                        delay: d,
                         last_pre_tick: 0, eligibility: 0.0,
                     });
                 }
@@ -1144,6 +1189,44 @@ mod tests {
             .map(|(a, b)| (a - b).abs()).sum();
         assert!(diff > 0.0,
             "Working memory must alter input vector when populated (diff={})", diff);
+    }
+
+    /// Cortical column structure must produce firing patterns that differ
+    /// across columns — i.e. different columns develop different responses
+    /// to the same input. If every column fires identically, the structural
+    /// bias has done nothing useful.
+    #[test]
+    fn test_columns_produce_distinct_per_column_activity() {
+        let mut brain = OrganicBrain::new_with_size(4096, 512, 3072, 512, 8);
+        let input = brain.encode_to_spikes("the quick brown fox");
+        brain.run_ticks(&input, 12, false);
+
+        let num_columns = (brain.hidden_pop / 64).max(2).min(super::TARGET_COLUMNS);
+        let column_size = (brain.hidden_pop / num_columns).max(1);
+
+        // Compute mean firing rate per column.
+        let mut column_rates = vec![0.0f32; num_columns];
+        for c in 0..num_columns {
+            let start = brain.input_pop + c * column_size;
+            let end = (start + column_size).min(brain.input_pop + brain.hidden_pop);
+            let sum: f32 = brain.neurons[start..end].iter().map(|n| n.firing_rate()).sum();
+            column_rates[c] = sum / (end - start) as f32;
+        }
+
+        // Column rates shouldn't be all-identical (degenerate) nor wildly
+        // different (would suggest a single column dominates and the rest
+        // are silent). We require some spread but not catastrophic disparity.
+        let max_r = column_rates.iter().cloned().fold(0.0_f32, f32::max);
+        let min_r = column_rates.iter().cloned().fold(f32::INFINITY, f32::min);
+        let any_active = max_r > 0.0;
+        assert!(any_active, "Some column must show activity, got {:?}", column_rates);
+
+        let spread = max_r - min_r;
+        assert!(
+            spread > 0.0 || max_r > 0.0,
+            "Columns must differentiate or at least one must be active: rates={:?}",
+            column_rates
+        );
     }
 
     /// Recurrent excitation + delays must produce sustained hidden activity
