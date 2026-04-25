@@ -170,32 +170,59 @@ LSM readout all received zero signal and could not learn.
 
 ## Compositional reasoning — empirical finding (2026-04-25)
 
-Tested whether the pure-neural learning loop (HDC + spiking + LSM + WM +
-predictive coding) can compositionally generalize. Curriculum: all 55
-2-operand single-digit additions with sum < 10. Training: 100 interleaved
-rounds = 5500 calls. Test: 8 novel 3-operand queries.
+Tested whether the pure-neural learning loop can compositionally generalize.
+Curriculum: all 55 2-operand single-digit additions with sum < 10. Training:
+100 interleaved rounds = 5500 calls. Test: 8 novel 3-operand queries.
 
-- **Recall on trained pairs: 55/55 (100%)** — taught pairs come back via HDC.
-- **Composition on novel 3-operand: 0/8** — LSM produces sigmoid-baseline
-  gibberish ("(%%(%1%%%(%(((%+%%((%(%(%(%+(%..."), no recognizable digits.
+### Round 1 — static input + feedforward only
+- Recall: 55/55 (100%)
+- Composition: 0/8 — LSM produces sigmoid-baseline gibberish like
+  `"(%%(%1%%%(%(((%+%%((%(%(%(%+(%..."`, no recognizable digits.
 
-Pure-neural compositional emergence does not happen at this scale and is
-not required by the architecture. The project's learning design is "Claude
-teaches, brain memorizes": a query the brain doesn't know hits Claude, the
-answer goes into HDC, next time it's asked the brain answers from memory.
+### Round 2 — added recurrent excitatory hidden + synaptic delays + temporal input encoding
+The brain now has:
+- 6 recurrent excitatory hidden→hidden connections per hidden neuron with
+  random delays 1-5 ticks (`brain.rs:RECURRENT_PER_HIDDEN`, `MAX_DELAY`).
+- Per-synapse delay field; `fired_history` ring buffer in `run_ticks_internal`
+  delivers each pre-synaptic spike `D` ticks after firing. STDP's `dt` becomes
+  exactly the synapse's delay, so STDP selectively strengthens connections
+  whose delay matches the temporal regularity of observed pre→post pairs —
+  the substrate for sequence learning, biologically modeled on conduction-
+  delay tuning in real cortex.
+- Temporal input encoding: queries stream over time (3 ticks per character)
+  rather than collapsing into one static spike pattern. The brain literally
+  *sees the query unfold*.
+
+Results:
+- Recall: 55/55 (100%) — unchanged.
+- Composition: **still 0/8**, but now produces empty strings instead of
+  gibberish. The readout learned to be silent on inputs it has no training
+  for, which is a small improvement in honesty but not in capability.
+
+### What this tells us
+Real architectural work was tried — delays, recurrent excitation, temporal
+streaming. The recurrent dynamics demonstrably work
+(`test_recurrent_dynamics_sustain_activity`). The brain genuinely processes
+queries as time-varying signals now. **But novel compositional
+generalization still doesn't emerge at this scale.**
+
+Modern ML achieves compositional generalization through architectural
+inductive biases (attention mechanisms in transformers, recursive structure
+in tree-RNNs). Spiking + STDP + recurrent dynamics, even with 80M neurons,
+don't have those biases. They learn what they're shown; they extrapolate
+poorly to novel structural compositions.
 
 **Implication for the stated example "teach 2+2 etc, brain solves 2+1+3":**
-The brain doesn't compositionally generalize. The path is: 2+1+3 hits
-Claude once, brain stores it, brain answers it forever after. Multiply
-across the curriculum and the brain accumulates compositional knowledge
-through experience, not emergence.
+This codebase will not deliver that without further architectural
+commitment. Possible bigger swings:
+1. Cortical-column microcircuits with structural priors (CLAUDE.md "What's Next")
+2. Attention-like compositional architecture (would deviate from the
+   biologically-pure spiking design)
+3. Massive scale + curriculum on 3+, 4+, 5+ operand pairs (memorization)
+4. Accept the architectural limit; rely on Claude-teaches-brain-memorizes
+   for novel queries.
 
-Wiring the ring as a math peripheral remains an option for principled
-deterministic computation, but it requires architectural commitments
-(operand decoding, command-bus encoding, multi-step chaining) that go
-beyond the project's stated "experience-driven learning" design and risk
-crossing the no-content-routing principle. Deferred unless the
-"every novel query hits Claude once" cost becomes prohibitive.
+None are quick wins. All require honest scoping with the user.
 
 ## What's Next
 

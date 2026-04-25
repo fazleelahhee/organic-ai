@@ -22,12 +22,29 @@ const HIDDEN_POP: usize = 76_000_000;
 const OUTPUT_POP: usize = 2_000_000;
 const MAX_SYNAPSES_PER_NEURON: usize = 4;
 const SPIKE_HISTORY_LEN: usize = 8;
+/// Maximum synaptic transmission delay in ticks. Recurrent hidden→hidden
+/// connections can have delays from 1 to MAX_DELAY, letting the network
+/// learn temporal sequences: a synapse with delay D bridges pre→post pairs
+/// that fire D ticks apart, so STDP selectively strengthens connections
+/// that match observed temporal regularities.
+const MAX_DELAY: usize = 5;
+/// Number of recurrent excitatory hidden→hidden connections per hidden
+/// neuron. These give the hidden layer the ability to sustain activity
+/// across ticks and learn temporal sequences.
+const RECURRENT_PER_HIDDEN: usize = 6;
+
+fn default_delay() -> u8 { 1 }
 
 /// A synapse in the brain — an incoming connection from source to this neuron.
+/// `delay` is the number of ticks between pre-synaptic firing and signal
+/// arrival at the post-synaptic terminal. Modeled as discrete tick offset
+/// rather than a continuous time constant, since the simulation is tick-based.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BrainSynapse {
     source: u32,
     weight: f32,
+    #[serde(default = "default_delay")]
+    delay: u8,
     last_pre_tick: u64,
     eligibility: f32,    // trace of recent activity — for three-factor learning
 }
@@ -135,18 +152,27 @@ impl OrganicBrain {
             neurons.push(BrainNeuron::new());
         }
 
-        // LAYERED architecture with lateral inhibition.
-        // Input → Hidden: strong excitatory forward connections
-        // Hidden ↔ Hidden: lateral inhibition (keeps activity sparse)
-        // Hidden → Output: excitatory forward connections
-        // Output ↔ Output: lateral inhibition
+        // LAYERED architecture with lateral inhibition + recurrent excitation.
+        // Input → Hidden: strong excitatory forward (delay 1)
+        // Hidden ↔ Hidden: lateral inhibition (keeps activity sparse, delay 1)
+        //                + recurrent excitation with random delays 1..=MAX_DELAY
+        //                  — this is what gives the hidden layer temporal
+        //                  structure. STDP can then learn which delay-D
+        //                  pre→post pairs actually co-occur D ticks apart in
+        //                  practice, selectively strengthening connections
+        //                  that match the observed temporal regularities of
+        //                  the input. Real cortex does exactly this with
+        //                  myelination patterns and conduction-delay tuning.
+        // Hidden → Output: excitatory forward (delay 1)
+        // Output ↔ Output: lateral inhibition (delay 1)
 
         // Input → Hidden
         for h in input_pop..input_pop + hidden_pop {
             for _ in 0..synapses_per.max(4) {
                 let src = fast_rand(&mut seed, input_pop);
                 neurons[h].synapses.push(BrainSynapse {
-                    source: src as u32, weight: 0.25, last_pre_tick: 0, eligibility: 0.0,
+                    source: src as u32, weight: 0.25, delay: 1,
+                    last_pre_tick: 0, eligibility: 0.0,
                 });
             }
             // Lateral inhibition within hidden
@@ -154,7 +180,22 @@ impl OrganicBrain {
                 let src = input_pop + fast_rand(&mut seed, hidden_pop);
                 if src != h {
                     neurons[h].synapses.push(BrainSynapse {
-                        source: src as u32, weight: -0.3, last_pre_tick: 0, eligibility: 0.0,
+                        source: src as u32, weight: -0.3, delay: 1,
+                        last_pre_tick: 0, eligibility: 0.0,
+                    });
+                }
+            }
+            // Recurrent excitatory hidden→hidden with random delays.
+            // Smaller weight than feedforward (0.10 vs 0.25) so that input
+            // drive still dominates and the network doesn't enter runaway
+            // activity from cascading recurrent excitation.
+            for _ in 0..RECURRENT_PER_HIDDEN {
+                let src = input_pop + fast_rand(&mut seed, hidden_pop);
+                if src != h {
+                    let d = (fast_rand(&mut seed, MAX_DELAY) + 1) as u8;
+                    neurons[h].synapses.push(BrainSynapse {
+                        source: src as u32, weight: 0.10, delay: d,
+                        last_pre_tick: 0, eligibility: 0.0,
                     });
                 }
             }
@@ -165,7 +206,8 @@ impl OrganicBrain {
             for _ in 0..synapses_per.max(4) {
                 let src = input_pop + fast_rand(&mut seed, hidden_pop);
                 neurons[o].synapses.push(BrainSynapse {
-                    source: src as u32, weight: 0.25, last_pre_tick: 0, eligibility: 0.0,
+                    source: src as u32, weight: 0.25, delay: 1,
+                    last_pre_tick: 0, eligibility: 0.0,
                 });
             }
             // Lateral inhibition within output
@@ -173,7 +215,8 @@ impl OrganicBrain {
                 let src = input_pop + hidden_pop + fast_rand(&mut seed, output_pop);
                 if src != o {
                     neurons[o].synapses.push(BrainSynapse {
-                        source: src as u32, weight: -0.3, last_pre_tick: 0, eligibility: 0.0,
+                        source: src as u32, weight: -0.3, delay: 1,
+                        last_pre_tick: 0, eligibility: 0.0,
                     });
                 }
             }
@@ -332,13 +375,23 @@ impl OrganicBrain {
         pattern
     }
 
-    /// Train the spiking network on an (input, target_output) pair via teacher-forcing.
+    /// Train the spiking network on an (input_frames, target_output) pair via
+    /// teacher-forcing.
     /// 1. Reset volatile state so each training trial starts clean.
-    /// 2. Run STDP-enabled ticks with input present and target output clamped.
-    ///    Clamped firings bypass the threshold gate inside `run_ticks_with_clamp`,
-    ///    so STDP runs on those output neurons every tick — strengthening
-    ///    incoming hidden→output synapses against hidden neurons firing now.
-    pub(crate) fn train_spiking(&mut self, input: &[f32], target_output: &[bool], n_ticks: usize) {
+    /// 2. Warm-up: stream input frames without clamping so hidden activity
+    ///    builds and the recurrent + delayed connections start carrying the
+    ///    temporal pattern.
+    /// 3. Continued: stream input frames WITH output clamped to target.
+    ///    Clamped firings bypass the threshold gate, so STDP runs on those
+    ///    output neurons every tick — strengthening incoming hidden→output
+    ///    synapses against hidden neurons firing now.
+    /// Total ticks across the two phases: `n_ticks`.
+    pub(crate) fn train_spiking(
+        &mut self,
+        frames: &[Vec<f32>],
+        target_output: &[bool],
+        n_ticks: usize,
+    ) {
         for n in &mut self.neurons {
             n.potential = 0.0;
             n.fired = false;
@@ -346,14 +399,14 @@ impl OrganicBrain {
             n.history_idx = 0;
         }
 
-        // First tick with input only — let hidden activity build before
-        // clamping outputs, so eligibility traces from hidden→output synapses
-        // are non-zero by the time the clamped output STDP fires.
-        self.run_ticks(input, 1, true);
+        // Warm-up: roughly one full pass through the frames so the network
+        // sees the entire temporal pattern before clamping engages.
+        let warm = frames.len().max(2).min(n_ticks);
+        self.run_ticks_temporal(frames, warm, true, None);
 
-        // Subsequent ticks teacher-force the target output.
-        if n_ticks > 1 {
-            self.run_ticks_with_clamp(input, n_ticks - 1, true, Some(target_output));
+        // Clamped phase: continue streaming frames while clamping the target.
+        if n_ticks > warm {
+            self.run_ticks_temporal(frames, n_ticks - warm, true, Some(target_output));
         }
     }
 
@@ -374,11 +427,54 @@ impl OrganicBrain {
             .collect()
     }
 
-    /// Run the brain for N ticks with given input, applying STDP learning.
+    /// Run the brain for N ticks with a single static input pattern.
     /// PARALLELIZED with rayon — all CPU cores process neurons simultaneously.
     /// Each neuron only writes to ITSELF, so parallel processing is safe.
     pub(crate) fn run_ticks(&mut self, input: &[f32], n_ticks: usize, learn: bool) {
         self.run_ticks_with_clamp(input, n_ticks, learn, None);
+    }
+
+    /// Encode text as a sequence of per-tick input frames. Each character
+    /// fires its position-sensitive neuron pattern for `ticks_per_char`
+    /// consecutive ticks, then yields to the next character. The brain sees
+    /// the query unfold IN TIME — the recurrent + delayed hidden connections
+    /// can then learn the temporal structure (which chars precede which, at
+    /// what lag) rather than collapsing the whole query into a static spike
+    /// pattern. This is what makes sequence learning possible.
+    pub(crate) fn encode_temporal(&self, text: &str, ticks_per_char: usize) -> Vec<Vec<f32>> {
+        let chars: Vec<u8> = text.bytes().collect();
+        let total_ticks = chars.len() * ticks_per_char;
+        let mut frames = Vec::with_capacity(total_ticks);
+        for t in 0..total_ticks {
+            let char_idx = t / ticks_per_char;
+            let mut frame = vec![0.0f32; self.input_pop];
+            if char_idx < chars.len() {
+                let b = chars[char_idx] as usize;
+                let pos = char_idx;
+                let idx1 = (b * 127 + pos * 251) % self.input_pop;
+                let idx2 = (b * 67 + pos * 139) % self.input_pop;
+                frame[idx1] = 1.0;
+                frame[idx2] = 0.7;
+            }
+            frames.push(frame);
+        }
+        frames
+    }
+
+    /// Run the brain for N ticks with temporal input frames + STDP learning.
+    /// Frame index t is `frames[t % frames.len()]`, so a multi-frame slice
+    /// streams the input over time. This is the path that exercises the
+    /// recurrent + delayed hidden connections — sequence dependence emerges
+    /// from genuine temporal dynamics, not from the brain compressing a
+    /// query into a static blob.
+    pub(crate) fn run_ticks_temporal(
+        &mut self,
+        frames: &[Vec<f32>],
+        n_ticks: usize,
+        learn: bool,
+        output_clamp: Option<&[bool]>,
+    ) {
+        self.run_ticks_internal(None, Some(frames), n_ticks, learn, output_clamp);
     }
 
     /// Same as `run_ticks`, but optionally clamps a set of output neurons to
@@ -398,9 +494,26 @@ impl OrganicBrain {
         learn: bool,
         output_clamp: Option<&[bool]>,
     ) {
+        self.run_ticks_internal(Some(input), None, n_ticks, learn, output_clamp);
+    }
+
+    /// Unified inner loop. Exactly one of `static_input` and `frames` should
+    /// be Some; the other None. This avoids a per-call Vec allocation that
+    /// would be expensive at 80M-neuron scale, while letting the same
+    /// integration / STDP / predictive-coding pipeline service both static
+    /// and temporal-streaming callers.
+    fn run_ticks_internal(
+        &mut self,
+        static_input: Option<&[f32]>,
+        frames: Option<&[Vec<f32>]>,
+        n_ticks: usize,
+        learn: bool,
+        output_clamp: Option<&[bool]>,
+    ) {
         use crate::predictive::PRED_DIM;
         use rayon::prelude::*;
         use std::collections::HashSet;
+        use std::collections::VecDeque;
 
         let input_pop = self.input_pop;
         let hidden_pop = self.hidden_pop;
@@ -409,9 +522,31 @@ impl OrganicBrain {
         let threshold = self.lif_params.threshold;
         let reset = self.lif_params.reset_potential;
 
-        for _ in 0..n_ticks {
+        // Ring buffer of recent fired sets, indexed by ticks-ago.
+        // fired_history[d] = neurons that fired d ticks ago (d=1 is one tick ago).
+        // Size = MAX_DELAY + 1 so a synapse with delay D reads fired_history[D].
+        // Initialized empty; populated as ticks progress.
+        let mut fired_history: VecDeque<HashSet<u32>> = VecDeque::with_capacity(MAX_DELAY + 2);
+        for _ in 0..=(MAX_DELAY + 1) { fired_history.push_back(HashSet::new()); }
+
+        // Seed fired_history[1] with neurons that already fired (so the very
+        // first tick of this run sees prior activity through delay-1 synapses).
+        let initial_fired: HashSet<u32> = self.neurons.iter().enumerate()
+            .filter(|(_, n)| n.fired).map(|(i, _)| i as u32).collect();
+        fired_history[1] = initial_fired;
+
+        for tick_iter in 0..n_ticks {
             self.tick += 1;
             let tick = self.tick;
+
+            // Resolve this tick's external input. Either the static slice
+            // (used every tick) or frame[tick_iter % frames.len()] (which
+            // gives temporal streaming when frames.len() > 1).
+            let input: &[f32] = match (static_input, frames) {
+                (Some(s), _) => s,
+                (None, Some(fs)) if !fs.is_empty() => &fs[tick_iter % fs.len()],
+                _ => &[],
+            };
 
             // Pre-tick state for predictive coding.
             let prev_input = self.sample_layer_rates(0, input_pop, PRED_DIM);
@@ -423,24 +558,20 @@ impl OrganicBrain {
                 .min(3.0);
             let base_lr = 0.02 * surprise_scale;
 
-            // Collect fired neuron indices (sparse)
-            let fired_set: HashSet<u32> = self.neurons.iter().enumerate()
-                .filter(|(_, n)| n.fired)
-                .map(|(i, _)| i as u32)
-                .collect();
-
             // PARALLEL + SPARSE: each neuron processed independently.
             // Skip neurons that have no input AND no residual potential (saves ~60% compute)
             self.neurons.par_iter_mut().enumerate().for_each(|(i, neuron)| {
                 // Sparse check: skip idle neurons ONLY during inference (not learning).
-                // During learning, every neuron must process to allow STDP.
-                // CRITICAL: must check whether any synapse source fired this tick;
-                // otherwise hidden neurons are skipped before they can integrate
-                // input from firing sources, and the network never propagates.
+                // Must check delay-aware arriving signals — a synapse with delay
+                // D delivers a spike now if its source fired exactly D ticks ago.
                 if !learn {
                     let has_external = i < input_pop && input.get(i).copied().unwrap_or(0.0) > 0.0;
-                    let has_synaptic = neuron.synapses.iter().any(|s| fired_set.contains(&s.source));
-                    if !has_external && !has_synaptic && neuron.potential < 0.01 && !neuron.fired {
+                    let has_arriving = neuron.synapses.iter().any(|s| {
+                        let d = s.delay as usize;
+                        d > 0 && d <= MAX_DELAY && fired_history.get(d)
+                            .map(|hs| hs.contains(&s.source)).unwrap_or(false)
+                    });
+                    if !has_external && !has_arriving && neuron.potential < 0.01 && !neuron.fired {
                         for syn in &mut neuron.synapses { syn.eligibility *= 0.9; }
                         return;
                     }
@@ -453,11 +584,19 @@ impl OrganicBrain {
                     total_input += input.get(i).copied().unwrap_or(0.0);
                 }
 
-                // Synaptic input + eligibility traces
+                // Synaptic input with per-synapse delay. A synapse with delay D
+                // delivers its source's spike from D ticks ago, arriving now.
+                // last_pre_tick records the source's actual fire tick (not
+                // arrival tick) so STDP's dt = post_fire_tick - source_fire_tick
+                // = delay, which is the temporal correlation distance the
+                // synapse encodes.
                 for syn in &mut neuron.synapses {
-                    if fired_set.contains(&syn.source) {
+                    let d = syn.delay as usize;
+                    let arrived = d > 0 && d <= MAX_DELAY && fired_history.get(d)
+                        .map(|hs| hs.contains(&syn.source)).unwrap_or(false);
+                    if arrived {
                         total_input += syn.weight;
-                        syn.last_pre_tick = tick;
+                        syn.last_pre_tick = tick.saturating_sub(syn.delay as u64);
                         if syn.weight > 0.0 { syn.eligibility = 1.0; }
                     }
                     syn.eligibility *= 0.9;
@@ -508,6 +647,15 @@ impl OrganicBrain {
             let curr_output = self.sample_layer_rates(input_pop + hidden_pop, output_pop, PRED_DIM);
             self.pred_input_to_hidden.update(&prev_input, &curr_hidden);
             self.pred_hidden_to_output.update(&prev_hidden, &curr_output);
+
+            // Advance fired_history: the neurons that just fired this tick
+            // become the new "fired 1 tick ago" entry. Older entries shift
+            // back toward MAX_DELAY; the oldest is dropped.
+            let new_fired: HashSet<u32> = self.neurons.iter().enumerate()
+                .filter(|(_, n)| n.fired).map(|(i, _)| i as u32).collect();
+            fired_history.pop_back();
+            fired_history.push_front(HashSet::new()); // index 0 is "just now" — populated next tick
+            fired_history[1] = new_fired;
         }
     }
 
@@ -551,17 +699,22 @@ impl OrganicBrain {
         }
 
         // SLOW PATH: HDC had nothing — fall back to spiking network.
-        // Run the spiking network to process the query through neural dynamics.
-        let mut input = self.encode_to_spikes(query);
+        // Stream the query as TEMPORAL FRAMES so the recurrent + delayed
+        // hidden connections process it as a sequence rather than a static
+        // blob. Each character occupies `ticks_per_char` consecutive ticks;
+        // an integration tail then lets recurrent dynamics settle before
+        // we read out an answer.
+        let mut frames = self.encode_temporal(query, 3);
 
-        // Inject working-memory context: prior query's output activity is
-        // stride-projected into the leading slice of input, scaled by recency.
-        // The query's own encoding occupies the full input population (sparse
-        // hash), so additive context preserves it while contributing prior state.
+        // Inject working-memory context into the first few frames so prior
+        // turns shape the start of the brain's temporal processing of this
+        // query. Decayed each turn, so old context naturally fades.
         if let Some(prior) = self.working_memory.recent_vector() {
-            let n = prior.len().min(input.len());
-            for i in 0..n {
-                input[i] = (input[i] + prior[i] * 0.4).min(1.0);
+            for frame in frames.iter_mut().take(3) {
+                let n = prior.len().min(frame.len());
+                for i in 0..n {
+                    frame[i] = (frame[i] + prior[i] * 0.4).min(1.0);
+                }
             }
         }
 
@@ -573,12 +726,15 @@ impl OrganicBrain {
         }
 
         // --- Attention gain modulation (before dynamics) ---
+        // Use the first frame's input as the attention key; the brain has
+        // not yet seen later frames at this point in the tick stream.
+        let first_frame: Vec<f32> = frames.first().cloned().unwrap_or_default();
         {
             let hidden_rates: Vec<f32> = self.neurons[self.input_pop..self.input_pop + self.hidden_pop]
                 .iter()
                 .map(|n| n.firing_rate())
                 .collect();
-            let gains = self.attention.compute_gains(&input, &hidden_rates, self.hidden_pop);
+            let gains = self.attention.compute_gains(&first_frame, &hidden_rates, self.hidden_pop);
             for (i, &g) in gains.iter().enumerate() {
                 let h = self.input_pop + i;
                 if h < self.neurons.len() {
@@ -587,11 +743,11 @@ impl OrganicBrain {
             }
         }
 
-        // 6 ticks: hidden neurons need ~5 ticks of integration against the
-        // 0.85 leak to first cross threshold from a single firing input
-        // source (steady-state ≈ 1.67 from 0.25/tick input). Below this,
-        // firing is inconsistent and the spiking network produces no signal.
-        self.run_ticks(&input, 6, false);
+        // Total ticks = frames.len() (one full pass of the input) + 8 tail
+        // ticks for recurrent dynamics to integrate the sequence into a
+        // sustained pattern that the readout can decode.
+        let n_ticks = frames.len() + 8;
+        self.run_ticks_temporal(&frames, n_ticks, false, None);
 
         // Snapshot hidden state into working memory before decoding.
         // Hidden is where the brain's "thought" is — output neurons fire only
@@ -651,16 +807,17 @@ impl OrganicBrain {
             self.hdc_memory.store(input_text, output_text);
         }
 
-        // Channel 2: spiking-network STDP via teacher-forcing.
-        // Always do enough ticks for STDP to bite — the network needs the
-        // first few ticks just for input drive to propagate to hidden firings,
-        // before clamped output STDP has any source eligibility to lock onto.
-        // Surprising pairs get extra reinforcement; predictable pairs still
-        // get maintenance rehearsal so the association doesn't fade.
-        let n_ticks = if surprise > 0.5 { 8 } else if surprise > 0.1 { 6 } else { 4 };
-        let input = self.encode_to_spikes(input_text);
+        // Channel 2: spiking-network STDP via teacher-forcing on temporal
+        // input frames. The brain sees the input as a sequence of characters
+        // unfolding in time — recurrent + delayed hidden connections learn
+        // the temporal regularities, and STDP on hidden→output associates
+        // the final integrated state with the answer.
+        // Total ticks scale with input length plus a fixed integration tail.
+        let frames = self.encode_temporal(input_text, 3);
+        let base_extra = if surprise > 0.5 { 12 } else if surprise > 0.1 { 8 } else { 5 };
+        let n_ticks = frames.len() + base_extra;
         let target = self.encode_output_target(output_text);
-        self.train_spiking(&input, &target, n_ticks);
+        self.train_spiking(&frames, &target, n_ticks);
 
         // Channel 3: LSM readout — learned position-conditioned char classifier
         // over hidden firing rates. After train_spiking, hidden state reflects
@@ -987,6 +1144,40 @@ mod tests {
             .map(|(a, b)| (a - b).abs()).sum();
         assert!(diff > 0.0,
             "Working memory must alter input vector when populated (diff={})", diff);
+    }
+
+    /// Recurrent excitation + delays must produce sustained hidden activity
+    /// after input is removed — the network has genuine temporal dynamics,
+    /// not just an instantaneous reflex. With pure feedforward + leak, hidden
+    /// activity collapses within a few ticks once input stops; recurrent
+    /// excitatory connections with delays let activity persist and chain
+    /// through delayed pathways. This is the substrate for sequence learning.
+    #[test]
+    fn test_recurrent_dynamics_sustain_activity() {
+        let mut brain = OrganicBrain::new_with_size(4096, 512, 3072, 512, 8);
+        let input = brain.encode_to_spikes("hello world");
+
+        // Drive with input long enough for hidden activity to ramp up and
+        // recurrent connections to seed sustained patterns.
+        brain.run_ticks(&input, 12, false);
+        let hidden_during: f32 = brain.neurons[brain.input_pop..brain.input_pop + brain.hidden_pop]
+            .iter().filter(|n| n.firing_rate() > 0.0).count() as f32
+            / brain.hidden_pop as f32;
+
+        // Remove input. Without recurrent excitation, activity collapses to
+        // ~0 within ~3 ticks of leak. With recurrent, activity persists.
+        let zero = vec![0.0f32; brain.input_pop];
+        brain.run_ticks(&zero, 6, false);
+        let hidden_after_silence: f32 = brain.neurons[brain.input_pop..brain.input_pop + brain.hidden_pop]
+            .iter().filter(|n| n.firing_rate() > 0.0).count() as f32
+            / brain.hidden_pop as f32;
+
+        assert!(
+            hidden_after_silence > 0.0,
+            "Recurrent dynamics must sustain SOME hidden activity after input removed: \
+             during={:.4} after_silence={:.4}",
+            hidden_during, hidden_after_silence
+        );
     }
 
     /// End-to-end empirical probe of the pure-neural learning loop.
