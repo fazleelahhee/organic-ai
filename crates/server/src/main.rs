@@ -72,9 +72,10 @@ async fn main() {
                     println!("  → {}", source);
 
                     // Only train when Claude teaches — don't overwrite brain's own answers.
-                    // Like a human: you don't re-learn what you already know.
                     if source == "claude" {
                         world.brain.train(&req.question, &response);
+                        // Save immediately after learning — never lose knowledge again
+                        let _ = organic_engine::persistence::save_world(&world, &save_path);
                     }
                     world.session_memory.record_interaction(
                         world.tick_count, &req.question,
