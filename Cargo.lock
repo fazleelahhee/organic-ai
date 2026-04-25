@@ -582,6 +582,7 @@ version = "0.1.0"
 dependencies = [
  "organic-neuron",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

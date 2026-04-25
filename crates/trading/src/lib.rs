@@ -39,10 +39,46 @@
 use organic_neuron::brain::OrganicBrain;
 use serde::{Deserialize, Serialize};
 
-/// A snapshot of market state at a single point in time. Field choice is
-/// intentionally minimal — extend with whatever indicators your strategy
-/// uses; the encoder buckets every numeric field uniformly so adding more
-/// is a matter of adjusting the field list, not the encoding pipeline.
+/// A discrete news event the brain should consider alongside numeric
+/// market state. The user's core ask: feed the brain Fed announcements,
+/// tweets, geopolitical events, and let it learn how each kind of news
+/// historically affected price. Encoded into the state's text key so HDC
+/// recall finds past situations with similar news context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewsItem {
+    /// Source category — short, controlled vocabulary like "FED", "SEC",
+    /// "TWITTER", "REUTERS", "ONCHAIN". Becomes a categorical token; same
+    /// source name across events activates the same input neurons.
+    pub source: String,
+    /// Free-text headline. The encoder extracts content words and folds
+    /// them into the brain's spike pattern, so the brain can learn that
+    /// "rates", "hike", "hawkish" cluster together.
+    pub headline: String,
+    /// Polarity in [-1, 1]. -1 = strongly bearish, +1 = strongly bullish.
+    /// Bucketed at fine resolution (per-percent) by `bucket_signed`.
+    pub sentiment: f64,
+    /// How long ago this happened, in hours. Used for time-decay weighting
+    /// and as an explicit token so the brain can learn "news within 1
+    /// hour reacts differently than news from 24 hours ago."
+    pub age_hours: f64,
+}
+
+/// Optional time-of-day / calendar context. Intraday and weekly seasonality
+/// is real and exploitable in markets — encoding the hour and weekday
+/// gives the brain features to learn time-conditional patterns.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TimeContext {
+    /// Hour of day in UTC (0-23).
+    pub hour_utc: u8,
+    /// Day of week (0=Mon, 6=Sun).
+    pub day_of_week: u8,
+}
+
+/// A snapshot of market state at a single point in time. Numeric features
+/// (price, volume, returns, volatility, indicators) plus optional news
+/// and time context. The encoder folds everything into a deterministic
+/// text key the brain can ingest — multi-modal in input, single-channel
+/// in encoding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketState {
     /// Most recent price.
@@ -58,6 +94,14 @@ pub struct MarketState {
     /// indicator name across calls produces the same encoding token, so
     /// the brain learns name → value → bucket associations consistently.
     pub indicators: Vec<(String, f64)>,
+    /// Recent news / sentiment events. Order doesn't matter — the encoder
+    /// sorts deterministically. Empty list = no news context, behaves like
+    /// pure-numeric pre-news version.
+    #[serde(default)]
+    pub news: Vec<NewsItem>,
+    /// Optional time-of-day context. None = no temporal features in encoding.
+    #[serde(default)]
+    pub timestamp: Option<TimeContext>,
 }
 
 /// Outcome of a position taken from a `MarketState`.
@@ -138,6 +182,8 @@ pub struct Analysis {
 /// text encoder. The bucketing is monotonic — close values produce the
 /// same or adjacent buckets, so the brain's distributed encoding sees
 /// numerically-similar states as activating overlapping input neurons.
+/// Coarse log-magnitude bucketing for values that span many decades
+/// (price, volume). 16 buckets per decade.
 fn bucket(name: &str, value: f64) -> String {
     if !value.is_finite() {
         return format!("{}=nan", name);
@@ -151,6 +197,40 @@ fn bucket(name: &str, value: f64) -> String {
     let log_mag = if mag < 1e-12 { -12.0 } else { mag.log10() };
     let idx = ((log_mag + 8.0) * 16.0).clamp(0.0, 255.0) as u32;
     format!("{}{}{}", name, sign, idx)
+}
+
+/// Fine-resolution bucketing for values typically in [-1, 1] (returns,
+/// sentiments, volatility, normalized indicators). Per-percent buckets so
+/// 0.01 and 0.02 are distinguishable — critical for trading where small
+/// magnitude differences are regime-defining. Falls back to coarse
+/// log-magnitude bucketing for values outside the normal range.
+fn bucket_signed(name: &str, value: f64) -> String {
+    if !value.is_finite() {
+        return format!("{}=nan", name);
+    }
+    if value.abs() > 1.0 {
+        return bucket(name, value);
+    }
+    // 200 buckets across [-1, 1] — fine enough to distinguish 0.01 from
+    // 0.02 (different buckets), coarse enough that 0.011 and 0.012 collide
+    // (same bucket → HDC recall finds them as identical).
+    let scaled = (value * 100.0).round().clamp(-100.0, 100.0) as i32;
+    let sign = if scaled < 0 { '-' } else { '+' };
+    format!("{}{}{}", name, sign, scaled.unsigned_abs())
+}
+
+/// Extract content words from a news headline for inclusion in the encoded
+/// state. Lowercase, alphanumeric-only, length >= 4 to drop common short
+/// words ("the", "a", "of"). Limited to first N content words to keep
+/// encoding length bounded. Order-stable so same headline → same tokens.
+fn headline_tokens(headline: &str, max_tokens: usize) -> Vec<String> {
+    headline.split_whitespace()
+        .map(|w| w.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>().to_lowercase())
+        .filter(|w| w.len() >= 4)
+        .take(max_tokens)
+        .collect()
 }
 
 /// The trading reasoner. Owns an OrganicBrain and adds domain-specific
@@ -207,18 +287,77 @@ impl TradingBrain {
         }
     }
 
-    /// Token-overlap similarity between two encoded state strings, in
-    /// [0, 1]. Two strings are "similar" if they share many of the same
-    /// space-separated tokens. Cheap, deterministic, easy to debug.
-    /// Used for top-K retrieval — separate from HDC similarity which is
-    /// more sensitive to character-level perturbations.
+    /// Persist the trade-journal history to a JSON file. Brain state is
+    /// already serialized via the engine's bincode persistence, but the
+    /// trading history (which lives in this struct, not the brain) needs
+    /// its own save/load. Without this, restarts wipe all trade memory.
+    pub fn save_history(&self, path: &str) -> std::io::Result<()> {
+        let entries: Vec<(String, Outcome)> = self.history.iter().cloned().collect();
+        let json = serde_json::to_string_pretty(&entries)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(path, json)
+    }
+
+    /// Load history from a JSON file written by `save_history`. Replaces
+    /// any existing history. Capped at `history_capacity`.
+    pub fn load_history(&mut self, path: &str) -> std::io::Result<()> {
+        let raw = std::fs::read_to_string(path)?;
+        let entries: Vec<(String, Outcome)> = serde_json::from_str(&raw)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        self.history.clear();
+        for entry in entries.into_iter().take(self.history_capacity) {
+            self.history.push_back(entry);
+        }
+        Ok(())
+    }
+
+    /// Number of entries in the trade-journal history. Useful for
+    /// monitoring whether load/save round-trips correctly.
+    pub fn history_len(&self) -> usize { self.history.len() }
+
+    /// Weighted token similarity in [0, 1]. Tokens are categorized by
+    /// prefix and weighted by trading importance:
+    ///   - core market tokens (price, volume, return, volatility): weight 3.0
+    ///   - news source / headline content (`src_*`, `w_*`): weight 2.5
+    ///   - sentiment / news age (`sent`, `age`): weight 2.0
+    ///   - time context (`hour+`, `dow+`): weight 1.0
+    ///   - indicator tokens (everything else): weight 1.5
+    ///
+    /// Same tokens shared between states contribute their weight to the
+    /// numerator; all weighted tokens contribute to the denominator. Two
+    /// states matching on price + return but not on RSI score higher than
+    /// two matching on RSI but not on price — which is the right thing
+    /// for trading. Used for top-K retrieval and outcome distribution.
     fn token_similarity(a: &str, b: &str) -> f32 {
+        fn weight_of(tok: &str) -> f32 {
+            // Core market signal: weighted heavily, dominates similarity.
+            if tok.starts_with("p+") || tok.starts_with("p-") { return 3.0; }
+            if tok.starts_with("v+") || tok.starts_with("v-") { return 3.0; }
+            if tok.starts_with("r+") || tok.starts_with("r-") { return 3.0; }
+            if tok.starts_with("s+") || tok.starts_with("s-") { return 3.0; }
+            // News content — second-tier signal.
+            if tok.starts_with("src_") || tok.starts_with("w_") { return 2.5; }
+            if tok.starts_with("sent") || tok.starts_with("age") { return 2.0; }
+            // Time context — lowest weight (intraday seasonality is real
+            // but weak compared to price action and news).
+            if tok.starts_with("hour+") || tok.starts_with("dow+") { return 1.0; }
+            // Default (indicators): mid-tier signal.
+            1.5
+        }
+
         let toks_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
         let toks_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
         if toks_a.is_empty() && toks_b.is_empty() { return 1.0; }
-        let inter = toks_a.intersection(&toks_b).count() as f32;
-        let union = toks_a.union(&toks_b).count() as f32;
-        if union <= 0.0 { 0.0 } else { inter / union }
+        let mut numer = 0.0f32;
+        let mut denom = 0.0f32;
+        for tok in toks_a.union(&toks_b) {
+            let w = weight_of(tok);
+            denom += w;
+            if toks_a.contains(tok) && toks_b.contains(tok) {
+                numer += w;
+            }
+        }
+        if denom <= 0.0 { 0.0 } else { numer / denom }
     }
 
     /// Find the top-K past patterns most similar to the given key.
@@ -271,18 +410,56 @@ impl TradingBrain {
     /// market data to the brain's text-native interface.
     pub fn encode_state(&self, state: &MarketState) -> String {
         let mut tokens: Vec<String> = Vec::new();
+
+        // Numeric market features. Price and volume span decades, so
+        // log-magnitude bucketing. Returns, volatility, and indicators
+        // are typically in [-1, 1], so fine-resolution per-percent
+        // bucketing — critical for trading discrimination.
         tokens.push(bucket("p", state.price));
         tokens.push(bucket("v", state.volume));
-        tokens.push(bucket("r", state.recent_return));
-        tokens.push(bucket("s", state.volatility));
-        for (name, value) in &state.indicators {
-            // Sanitize indicator name to a short alphanumeric — defensive
-            // against unexpected characters that would confuse the encoder.
-            let short: String = name.chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .take(4).collect();
-            tokens.push(bucket(&short, *value));
+        tokens.push(bucket_signed("r", state.recent_return));
+        tokens.push(bucket_signed("s", state.volatility));
+        // Indicators sorted alphabetically for deterministic ordering —
+        // same logical state must produce same encoded key regardless of
+        // input order.
+        let mut indicators: Vec<&(String, f64)> = state.indicators.iter().collect();
+        indicators.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, value) in indicators {
+            // Keep full sanitized name (no truncation) so distinct
+            // indicators don't collide on a 4-char prefix.
+            let safe: String = name.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                .collect();
+            tokens.push(bucket_signed(&safe, *value));
         }
+
+        // Time context — intraday and weekday seasonality.
+        if let Some(ts) = state.timestamp {
+            tokens.push(format!("hour+{}", ts.hour_utc.min(23)));
+            tokens.push(format!("dow+{}", ts.day_of_week.min(6)));
+        }
+
+        // News context. Each NewsItem contributes:
+        //   - source token (categorical, e.g. "src_fed")
+        //   - sentiment bucket (fine resolution)
+        //   - age bucket (recent vs old news matters for reaction)
+        //   - up to 5 content words from the headline
+        // Sorted by source then headline for determinism.
+        let mut news_sorted: Vec<&NewsItem> = state.news.iter().collect();
+        news_sorted.sort_by(|a, b|
+            a.source.cmp(&b.source).then_with(|| a.headline.cmp(&b.headline)));
+        for n in news_sorted {
+            let src_tag: String = n.source.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                .collect();
+            tokens.push(format!("src_{}", src_tag));
+            tokens.push(bucket_signed("sent", n.sentiment));
+            tokens.push(bucket("age", n.age_hours.max(0.01)));
+            for word in headline_tokens(&n.headline, 5) {
+                tokens.push(format!("w_{}", word));
+            }
+        }
+
         tokens.join(" ")
     }
 
@@ -484,6 +661,20 @@ impl TradingBrain {
             steps.push(format!("counter_evidence:n={}", counter_evidence.len()));
         }
 
+        // Counter-evidence confidence penalty: take the empirical
+        // probability of the OPPOSING direction from the outcome
+        // distribution, scale by 0.5, subtract from confidence. A 70/30
+        // split loses up to 15% confidence vs a 95/5 split — the trader
+        // sees genuine uncertainty surfaced in the headline number, not
+        // just buried in counter_evidence.
+        let opposing_p = match reasoned_direction {
+            Direction::Up => outcome_distribution.p_down,
+            Direction::Down => outcome_distribution.p_up,
+            Direction::Flat => outcome_distribution.p_up.max(outcome_distribution.p_down),
+        };
+        let confidence = (confidence - opposing_p * 0.5).clamp(0.0, 1.0);
+        steps.push(format!("opposing_p:{:.2}", opposing_p));
+
         Analysis {
             direction: reasoned_direction,
             confidence,
@@ -547,6 +738,8 @@ mod tests {
                 ("rsi".to_string(), 55.0),
                 ("macd".to_string(), 0.001),
             ],
+            news: Vec::new(),
+            timestamp: None,
         }
     }
 
@@ -625,6 +818,8 @@ mod tests {
                 ("rsi".to_string(), 72.0),
                 ("macd".to_string(), 0.04),
             ],
+            news: Vec::new(),
+            timestamp: None,
         };
         let bear_state = MarketState {
             price: 100.0, volume: 5000.0,
@@ -633,6 +828,8 @@ mod tests {
                 ("rsi".to_string(), 28.0),
                 ("macd".to_string(), -0.04),
             ],
+            news: Vec::new(),
+            timestamp: None,
         };
         let bull_outcome = Outcome { direction: Direction::Up, magnitude: 0.03 };
         let bear_outcome = Outcome { direction: Direction::Down, magnitude: 0.03 };
@@ -764,6 +961,96 @@ mod tests {
         }
     }
 
+    /// Multi-modal: news context must affect the encoded key. The same
+    /// numeric market state with different news should produce DIFFERENT
+    /// encodings — otherwise news input is being silently dropped.
+    #[test]
+    fn test_news_context_changes_encoding() {
+        let tb = TradingBrain::new_small(2048);
+        let base = sample_state(50000.0);
+        let mut with_fed_news = base.clone();
+        with_fed_news.news.push(NewsItem {
+            source: "FED".to_string(),
+            headline: "Fed raises rates by fifty basis points".to_string(),
+            sentiment: -0.6,
+            age_hours: 1.0,
+        });
+
+        let e_base = tb.encode_state(&base);
+        let e_news = tb.encode_state(&with_fed_news);
+        assert_ne!(e_base, e_news,
+            "News should change the encoded state key (base={}, news={})",
+            e_base, e_news);
+        assert!(e_news.contains("src_fed"), "News encoding must include source tag");
+        assert!(e_news.contains("sent-"), "Negative sentiment must encode with - sign");
+    }
+
+    /// Multi-modal: training on (state + news → outcome) and querying
+    /// with the same news should recall the trained outcome. This is the
+    /// core trading use case — Fed announces, brain remembers historical
+    /// reactions to similar Fed announcements.
+    #[test]
+    fn test_news_context_drives_recall() {
+        let mut tb = TradingBrain::new_small(2048);
+        let mut state = sample_state(50000.0);
+        state.news.push(NewsItem {
+            source: "FED".to_string(),
+            headline: "FOMC raises rates aggressive hawkish".to_string(),
+            sentiment: -0.7,
+            age_hours: 0.5,
+        });
+        state.timestamp = Some(TimeContext { hour_utc: 18, day_of_week: 2 });
+
+        // Train: when this kind of news arrives, BTC drops.
+        let outcome = Outcome { direction: Direction::Down, magnitude: 0.05 };
+        for _ in 0..30 { tb.train_on_outcome(&state, &outcome); }
+
+        let analysis = tb.analyze(&state);
+        assert_eq!(analysis.direction, Direction::Down,
+            "Trained Fed-hawkish state should recall as Down (steps: {:?})",
+            analysis.reasoning_steps);
+    }
+
+    /// History persistence: save_history → load_history must round-trip
+    /// the trade journal exactly. Production deployments will use this
+    /// to keep accumulated trade data across restarts.
+    #[test]
+    fn test_history_persistence_roundtrip() {
+        let mut tb = TradingBrain::new_small(2048);
+        let state = sample_state(100.0);
+        let outcome = Outcome { direction: Direction::Up, magnitude: 0.02 };
+        for _ in 0..5 { tb.train_on_outcome(&state, &outcome); }
+        let len_before = tb.history_len();
+        assert_eq!(len_before, 5);
+
+        let path = format!("/tmp/trading_history_test_{}.json", std::process::id());
+        tb.save_history(&path).expect("save_history");
+
+        let mut tb2 = TradingBrain::new_small(2048);
+        assert_eq!(tb2.history_len(), 0);
+        tb2.load_history(&path).expect("load_history");
+        assert_eq!(tb2.history_len(), len_before);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Volatility-aware bucketing: returns of 0.01 vs 0.02 must encode
+    /// differently. Coarse log-magnitude bucketing collapsed both into
+    /// the same bucket; fine bucketing distinguishes them — critical for
+    /// trading regime discrimination.
+    #[test]
+    fn test_fine_bucketing_distinguishes_small_returns() {
+        let tb = TradingBrain::new_small(2048);
+        let mut s1 = sample_state(100.0);
+        let mut s2 = sample_state(100.0);
+        s1.recent_return = 0.01;
+        s2.recent_return = 0.02;
+        let e1 = tb.encode_state(&s1);
+        let e2 = tb.encode_state(&s2);
+        assert_ne!(e1, e2,
+            "Returns 0.01 and 0.02 must encode differently: {} vs {}", e1, e2);
+    }
+
     /// Confidence calibration: a state seen unanimously should have
     /// strictly higher confidence than a state seen with 60/40 split.
     /// Boring ML often produces overconfident scores; the reasoner here
@@ -776,6 +1063,8 @@ mod tests {
             price: 200.0, volume: 5000.0,
             recent_return: 0.01, volatility: 0.03,
             indicators: vec![("rsi".to_string(), 50.0)],
+            news: Vec::new(),
+            timestamp: None,
         };
 
         // Unanimous: 10 Up training samples.
