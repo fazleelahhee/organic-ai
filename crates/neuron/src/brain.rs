@@ -407,15 +407,12 @@ impl OrganicBrain {
             }
         }
 
-        // STEP 3: COMBINED processing — both systems work together.
+        // STEP 3: FAST PATH — HDC recall returns immediately if it has an answer.
         //
-        // Fast path: attractor memory recalls (50ms)
-        // Deep path: spiking network processes (parallel neural dynamics)
-        // Combined: fast recall PRIMES the spiking network, spiking network
-        // ENRICHES the recall with temporal patterns and associations.
-        //
-        // Like a human: fast intuition (gut feeling) + slow deliberation
-        // (thinking it through) = better answer than either alone.
+        // The spiking network (80M neurons) takes seconds to run. Running it
+        // before returning the HDC result causes HTTP timeouts. Instead:
+        //   - Fast path: HDC recall hit → return IMMEDIATELY (~1ms)
+        //   - Slow path: HDC miss → fall back to spiking network
 
         // Fast: attractor memory recall with context
         let (fast_response, _source) = crate::thinking::think(
@@ -424,25 +421,21 @@ impl OrganicBrain {
             query,
         );
 
-        // Deep: run spiking network — it processes the query through
-        // 100M neurons with STDP-learned connectivity
+        // FAST PATH: HDC has an answer — return it immediately, skip spiking network.
+        if !fast_response.is_empty() {
+            self.context.add_turn(query, &fast_response);
+            self.inner_life.set_free();
+            return fast_response;
+        }
+
+        // SLOW PATH: HDC had nothing — fall back to spiking network.
+        // Run the spiking network to process the query through neural dynamics.
         let input = self.encode_to_spikes(query);
         let output_start = self.input_pop + self.hidden_pop;
         for i in output_start..(output_start + self.output_pop) {
             self.neurons[i].potential = 0.0;
             self.neurons[i].fired = false;
             self.neurons[i].spike_history = [false; SPIKE_HISTORY_LEN];
-        }
-
-        // If fast recall found something, PRIME the spiking network with it.
-        if !fast_response.is_empty() {
-            let prime = self.encode_to_spikes(&fast_response);
-            for i in 0..self.hidden_pop.min(prime.len()) {
-                let h = self.input_pop + i;
-                if h < self.neurons.len() {
-                    self.neurons[h].potential += prime.get(i).copied().unwrap_or(0.0) * 0.3;
-                }
-            }
         }
 
         // --- Attention gain modulation (before dynamics) ---
@@ -472,12 +465,7 @@ impl OrganicBrain {
 
         let deep_response = self.decode_from_rates();
 
-        // Combine: prefer fast recall (it's more reliable), but use deep
-        // response if fast failed. If both have content, fast wins
-        // (but deep processing still strengthened the spiking pathways).
-        let response = if !fast_response.is_empty() {
-            fast_response
-        } else if !deep_response.is_empty() && deep_response.chars().any(|c| c.is_alphanumeric()) {
+        let response = if !deep_response.is_empty() && deep_response.chars().any(|c| c.is_alphanumeric()) {
             deep_response
         } else {
             self.inner_life.set_free();
