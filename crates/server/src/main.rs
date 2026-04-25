@@ -74,8 +74,6 @@ async fn main() {
                     // Only train when Claude teaches — don't overwrite brain's own answers.
                     if source == "claude" {
                         world.brain.train(&req.question, &response);
-                        // Save immediately after learning — never lose knowledge again
-                        let _ = organic_engine::persistence::save_world(&world, &save_path);
                     }
                     world.session_memory.record_interaction(
                         world.tick_count, &req.question,
