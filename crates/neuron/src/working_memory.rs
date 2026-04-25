@@ -127,6 +127,15 @@ pub struct WorkingMemory {
     current_step: usize,
     /// Execution history
     pub completed_plans: u64,
+    /// Most recent neural-state snapshot from the spiking network — a stride-
+    /// sampled output firing-rate vector. Preserved across queries so the
+    /// brain has persistent context. This is what makes the brain a
+    /// continuously learning organism instead of a stateless responder.
+    #[serde(default)]
+    state_snapshot: Vec<f32>,
+    /// How "fresh" the snapshot is (1.0 = just stored, 0.0 = fully decayed).
+    #[serde(default)]
+    state_strength: f32,
 }
 
 impl WorkingMemory {
@@ -136,6 +145,34 @@ impl WorkingMemory {
             plan: Vec::new(),
             current_step: 0,
             completed_plans: 0,
+            state_snapshot: Vec::new(),
+            state_strength: 0.0,
+        }
+    }
+
+    /// Store a raw neural-state vector (e.g. a stride-sampled output firing-rate
+    /// vector). This is how cross-query context is preserved: the brain's
+    /// output activity at the end of a query becomes input context for the next.
+    pub fn store_vector(&mut self, state: &[f32]) {
+        self.state_snapshot = state.to_vec();
+        self.state_strength = 1.0;
+    }
+
+    /// Get the most recent stored vector, scaled by current freshness.
+    /// Returns None if nothing stored or fully decayed.
+    pub fn recent_vector(&self) -> Option<Vec<f32>> {
+        if self.state_strength <= 0.0 || self.state_snapshot.is_empty() {
+            return None;
+        }
+        Some(self.state_snapshot.iter().map(|v| v * self.state_strength).collect())
+    }
+
+    /// Decay the state-snapshot freshness. Called every query so old context
+    /// fades naturally — like real working memory.
+    pub fn decay_state(&mut self, rate: f32) {
+        self.state_strength = (self.state_strength - rate).max(0.0);
+        if self.state_strength <= 0.0 {
+            self.state_snapshot.clear();
         }
     }
 

@@ -7,8 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 
-const SAMPLE_SIZE: usize = 4096;
-const OUTPUT_DIM: usize = 1024;
+pub const SAMPLE_SIZE: usize = 4096;
+/// 1024 = 10 character positions × 95 printable-ASCII chars + 74 unused slack.
+/// Used by `OrganicBrain` as a position-conditioned char-classification readout.
+pub const OUTPUT_DIM: usize = 1024;
+pub const CHARS_PER_POSITION: usize = 95;
+pub const MAX_OUTPUT_LEN: usize = 10;
 
 /// Readout layer that taps into hidden-population firing rates.
 #[derive(Debug, Clone, Serialize, Deserialize)]

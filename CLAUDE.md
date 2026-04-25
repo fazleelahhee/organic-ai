@@ -114,17 +114,88 @@ bash train_smart.sh
 # All subsequent rounds reuse files — free forever
 ```
 
-## What Works Today
+## What Works Today (verified in the live pipeline)
 
-- 80M spiking neurons with rayon parallelism on 32GB Linux box
-- HDC memory: 10,000+ fact capacity, one-shot learning, no cross-contamination
-- Ring attractor: 100% accurate math (add, subtract, multiply, divide, power)
-- Brain recalls learned facts from HDC vectors, not Claude
-- Saves to disk, persists across restarts
-- Browser visualizer at http://host:3000
-- User text input via POST /api/message
-- Inner life: brain thinks when idle, discovers transitive knowledge
-- Organism simulation: growth, evolution, QD archive running continuously
+- HDC memory: 10,000+ fact capacity, one-shot store/recall, no cross-contamination.
+- Brain recalls learned facts from HDC vectors when an exact-or-similar query was taught.
+  Falls through to Claude on a miss; Claude's answer is then stored in HDC.
+- **Spiking network learns from training (wired 2026-04-25)**: `train()` runs
+  STDP-enabled ticks with teacher-forced output clamping. Hidden→output
+  synapses strengthen for the input→output pair. Verified by test
+  `test_spiking_training_strengthens_target_synapses`.
+- **Predictive coding active (wired 2026-04-25)**: `pred_input_to_hidden` and
+  `pred_hidden_to_output` update every tick inside `run_ticks`. Prediction
+  error scales the STDP learning rate — surprising transitions drive stronger
+  plasticity (free-energy-style). Verified by `test_predictive_coding_*`.
+- **Working memory persists across queries (wired 2026-04-25)**: hidden firing
+  rates are stride-sampled at the end of each `process()` and stored in WM.
+  Next query's input vector receives the prior state injected at scaled
+  strength (decays each turn). This is the brain's continuous-learning
+  context — what makes it different from a stateless fine-tune. Verified by
+  `test_working_memory_*`.
+- **LSM readout decodes output (wired 2026-04-25)**: 1024-d learned linear
+  projection over 4096 hidden samples, treated as 10 char positions × 95
+  printable-ASCII chars. Trained alongside STDP via delta-rule against
+  one-hot target text. Replaces the coarse 5-level chunk-of-4 decoder.
+  Verified by `test_lsm_readout_learns_target` and
+  `test_brain_holds_multiple_distinct_mappings`.
+- Saves to disk, persists across restarts.
+- Browser visualizer at http://host:3000.
+- User text input via POST /api/message.
+- Inner life: brain daydreams when idle, discovers transitive knowledge across HDC.
+- Organism simulation: growth, evolution, QD archive running continuously.
+
+### Important architectural fix (2026-04-25)
+
+The sparse-check in `run_ticks` was over-aggressive: it skipped any neuron
+with no external input, no residual potential, and no recent fire — which
+meant **every hidden neuron was skipped on every tick during inference**,
+because they have no external input and start at potential=0. The check now
+also considers whether any synapse source fired this tick, so input
+propagates into hidden as designed.
+
+Before fix: 0 hidden firings per query. After fix: ~700 hidden firings on a
+1536-neuron test brain. Without this, predictive coding, WM snapshots, and
+LSM readout all received zero signal and could not learn.
+
+## Built but NOT wired into the live pipeline (remaining)
+
+- **Ring attractor (math substrate)**: Instantiated at `brain.rs:193`,
+  never called outside its own unit tests. See "compositional reasoning
+  empirical finding" below for whether this matters.
+- **Attention**: Computed once before `run_ticks` and applied as a one-shot
+  multiplier on hidden potentials. Decays on the next tick. (`brain.rs:391-397`)
+- **Distributed network** (`crates/network/`, 443 LOC): Entire crate, never
+  instantiated.
+
+## Compositional reasoning — empirical finding (2026-04-25)
+
+Tested whether the pure-neural learning loop (HDC + spiking + LSM + WM +
+predictive coding) can compositionally generalize. Curriculum: all 55
+2-operand single-digit additions with sum < 10. Training: 100 interleaved
+rounds = 5500 calls. Test: 8 novel 3-operand queries.
+
+- **Recall on trained pairs: 55/55 (100%)** — taught pairs come back via HDC.
+- **Composition on novel 3-operand: 0/8** — LSM produces sigmoid-baseline
+  gibberish ("(%%(%1%%%(%(((%+%%((%(%(%(%+(%..."), no recognizable digits.
+
+Pure-neural compositional emergence does not happen at this scale and is
+not required by the architecture. The project's learning design is "Claude
+teaches, brain memorizes": a query the brain doesn't know hits Claude, the
+answer goes into HDC, next time it's asked the brain answers from memory.
+
+**Implication for the stated example "teach 2+2 etc, brain solves 2+1+3":**
+The brain doesn't compositionally generalize. The path is: 2+1+3 hits
+Claude once, brain stores it, brain answers it forever after. Multiply
+across the curriculum and the brain accumulates compositional knowledge
+through experience, not emergence.
+
+Wiring the ring as a math peripheral remains an option for principled
+deterministic computation, but it requires architectural commitments
+(operand decoding, command-bus encoding, multi-step chaining) that go
+beyond the project's stated "experience-driven learning" design and risk
+crossing the no-content-routing principle. Deferred unless the
+"every novel query hits Claude once" cost becomes prohibitive.
 
 ## What's Next
 
@@ -135,18 +206,6 @@ bash train_smart.sh
 - Cortical columns (1M structured neurons beats 80M random ones)
 - Sequence learning for understanding sentences and code
 - Earned autonomy for file operations (human approves, brain learns preferences)
-
-## Context Engine (CCE)
-
-This project uses Claude Context Engine for intelligent code retrieval.
-
-**IMPORTANT: You MUST use `context_search` instead of reading files directly**
-when exploring the codebase, answering questions about code, or understanding
-how things work.
-
-**When to use `Read` instead:**
-- You need to edit a specific file (read before editing)
-- You need the exact, complete content of a known file path
 
 ## Output Style
 

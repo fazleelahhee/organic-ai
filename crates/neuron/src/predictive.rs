@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-const PRED_DIM: usize = 256;
+pub const PRED_DIM: usize = 256;
 
 /// A single prediction layer (linear model + error tracking).
 #[derive(Debug, Clone, Serialize, Deserialize)]
