@@ -55,52 +55,151 @@ fn compute_num_columns(hidden_pop: usize) -> usize {
 
 fn default_delay() -> u8 { 1 }
 
+/// Quantization scales. Values stored in compact integer form, dequantized
+/// to f32 only when arithmetic needs it. Saves ~50% RAM at the cost of
+/// some precision loss on small updates (acceptable for STDP — see
+/// `set_weight_f32` for details).
+///
+/// **Weights**: i16 with scale 32767 — quantum 1/32767 ≈ 3e-5. Plenty of
+/// resolution for STDP updates of 0.005-0.05.
+///
+/// **Eligibility**: u8 with scale 255 — quantum 1/255 ≈ 4e-3. Coarser
+/// but eligibility is in [0, 1] and decays exponentially, so coarseness
+/// rounds toward zero on its own.
+const WEIGHT_QUANT_SCALE: f32 = 32767.0;
+const ELIG_QUANT_SCALE: f32 = 255.0;
+const POTENTIAL_QUANT_SCALE: f32 = 4096.0;
+
 /// A synapse in the brain — an incoming connection from source to this neuron.
 /// `delay` is the number of ticks between pre-synaptic firing and signal
 /// arrival at the post-synaptic terminal. Modeled as discrete tick offset
 /// rather than a continuous time constant, since the simulation is tick-based.
+///
+/// **Quantized layout** (16 bytes vs ~24 before — 33% reduction):
+///   source: u32         (4 bytes — full address space needed for 80M neurons)
+///   last_pre_tick: u32  (4 bytes — ~50 days at 1ms tick is enough)
+///   weight: i16         (2 bytes — quantized in [-1, 1])
+///   eligibility: u8     (1 byte  — quantized in [0, 1])
+///   delay: u8           (1 byte  — already u8)
+///   total: 12 bytes (with alignment padding to 16)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BrainSynapse {
     source: u32,
-    weight: f32,
+    /// Tick the source last fired, truncated to u32. Sufficient for ~50
+    /// days of continuous operation at 1ms ticks. Wraps cleanly on
+    /// overflow because dt comparisons use saturating_sub.
+    last_pre_tick: u32,
+    /// Synaptic weight, quantized i16 in [-1, 1]. Use `weight_f32()` and
+    /// `set_weight_f32()` for arithmetic.
+    weight: i16,
+    /// Eligibility trace, quantized u8 in [0, 1]. Use `elig_f32()` and
+    /// `set_elig_f32()` for arithmetic.
+    eligibility: u8,
     #[serde(default = "default_delay")]
     delay: u8,
-    last_pre_tick: u64,
-    eligibility: f32,    // trace of recent activity — for three-factor learning
+}
+
+impl BrainSynapse {
+    /// Construct a synapse from f32 weight (quantized internally).
+    /// Eligibility starts at 0, last_pre_tick at 0.
+    #[inline]
+    pub(crate) fn new(source: u32, weight: f32, delay: u8) -> Self {
+        Self {
+            source,
+            last_pre_tick: 0,
+            weight: (weight * WEIGHT_QUANT_SCALE).clamp(-32767.0, 32767.0) as i16,
+            eligibility: 0,
+            delay,
+        }
+    }
+
+    /// Read weight as f32. Cheap (one int→float + divide).
+    #[inline]
+    pub(crate) fn weight_f32(&self) -> f32 {
+        self.weight as f32 / WEIGHT_QUANT_SCALE
+    }
+    /// Write weight from f32. Clamps to [-1, 1] before quantization.
+    #[inline]
+    pub(crate) fn set_weight_f32(&mut self, w: f32) {
+        self.weight = (w * WEIGHT_QUANT_SCALE).clamp(-32767.0, 32767.0) as i16;
+    }
+    /// Read eligibility as f32.
+    #[inline]
+    pub(crate) fn elig_f32(&self) -> f32 {
+        self.eligibility as f32 / ELIG_QUANT_SCALE
+    }
+    /// Write eligibility from f32. Clamps to [0, 1].
+    #[inline]
+    pub(crate) fn set_elig_f32(&mut self, e: f32) {
+        self.eligibility = (e * ELIG_QUANT_SCALE).clamp(0.0, 255.0) as u8;
+    }
 }
 
 /// A single neuron in the brain.
+///
+/// **Quantized layout** (~16 bytes vs ~52 before — 70% reduction
+/// excluding the synapse Vec which is unchanged):
+///   synapses: Vec<BrainSynapse>  (24 bytes — Vec header)
+///   last_fire_tick: u32           (4 bytes — was u64; ~50d at 1ms is enough)
+///   potential: i16                (2 bytes — was f32; quantized in [-8, +8])
+///   spike_history: u8             (1 byte  — was [bool; 8]; bit-packed)
+///   fired: bool                   (1 byte)
+///   history_idx: u8               (1 byte  — was usize; only needs [0, 7])
+///   total fields: 33 bytes (with padding aligned)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BrainNeuron {
-    pub(crate) potential: f32,
-    pub(crate) fired: bool,
-    pub(crate) last_fire_tick: u64,
-    pub(crate) spike_history: [bool; SPIKE_HISTORY_LEN], // circular buffer of recent spikes
-    pub(crate) history_idx: usize,
     pub(crate) synapses: Vec<BrainSynapse>,
+    /// Tick the neuron last fired, truncated to u32 (sufficient for
+    /// ~50d at 1ms ticks). Wraps with saturating_sub semantics.
+    pub(crate) last_fire_tick: u32,
+    /// Membrane potential, quantized i16 in [-8, 8] range (clamped at
+    /// integration). Threshold is normally 0.8, so [-8, 8] gives 10x
+    /// headroom for transient overshoot. Use `potential_f32()` /
+    /// `set_potential_f32()` for arithmetic.
+    pub(crate) potential: i16,
+    /// Recent-fires bit-packed. Bit i = 1 if fired SPIKE_HISTORY_LEN-i
+    /// ticks ago. Total: SPIKE_HISTORY_LEN bits = 1 byte.
+    pub(crate) spike_history: u8,
+    pub(crate) fired: bool,
+    pub(crate) history_idx: u8,
 }
 
 impl BrainNeuron {
     fn new() -> Self {
         Self {
-            potential: 0.0,
-            fired: false,
-            last_fire_tick: 0,
-            spike_history: [false; SPIKE_HISTORY_LEN],
-            history_idx: 0,
             synapses: Vec::new(),
+            last_fire_tick: 0,
+            potential: 0,
+            spike_history: 0,
+            fired: false,
+            history_idx: 0,
         }
     }
 
-    /// Firing rate over recent history (0.0 to 1.0)
+    /// Read potential as f32.
+    #[inline]
+    pub(crate) fn potential_f32(&self) -> f32 {
+        self.potential as f32 / POTENTIAL_QUANT_SCALE
+    }
+    /// Write potential from f32. Clamps to [-8, 8] before quantization.
+    #[inline]
+    pub(crate) fn set_potential_f32(&mut self, p: f32) {
+        self.potential = (p * POTENTIAL_QUANT_SCALE).clamp(-32767.0, 32767.0) as i16;
+    }
+
+    /// Firing rate over recent history (0.0 to 1.0). Counts set bits.
     pub(crate) fn firing_rate(&self) -> f32 {
-        let count = self.spike_history.iter().filter(|&&s| s).count();
-        count as f32 / SPIKE_HISTORY_LEN as f32
+        self.spike_history.count_ones() as f32 / SPIKE_HISTORY_LEN as f32
     }
 
     fn record_spike(&mut self, fired: bool) {
-        self.spike_history[self.history_idx] = fired;
-        self.history_idx = (self.history_idx + 1) % SPIKE_HISTORY_LEN;
+        let bit = 1u8 << (self.history_idx as u8);
+        if fired {
+            self.spike_history |= bit;
+        } else {
+            self.spike_history &= !bit;
+        }
+        self.history_idx = (self.history_idx + 1) % SPIKE_HISTORY_LEN as u8;
     }
 }
 
@@ -196,10 +295,7 @@ impl OrganicBrain {
             // Feedforward excitatory from input — every column gets all inputs.
             for _ in 0..synapses_per.max(4) {
                 let src = fast_rand(&mut seed, input_pop);
-                neurons[h].synapses.push(BrainSynapse {
-                    source: src as u32, weight: 0.25, delay: 1,
-                    last_pre_tick: 0, eligibility: 0.0,
-                });
+                neurons[h].synapses.push(BrainSynapse::new(src as u32, 0.25, 1));
             }
 
             let h_local = h - input_pop;
@@ -219,10 +315,7 @@ impl OrganicBrain {
                     input_pop + fast_rand(&mut seed, hidden_pop)
                 };
                 if src != h {
-                    neurons[h].synapses.push(BrainSynapse {
-                        source: src as u32, weight: -0.3, delay: 1,
-                        last_pre_tick: 0, eligibility: 0.0,
-                    });
+                    neurons[h].synapses.push(BrainSynapse::new(src as u32, -0.3, 1));
                 }
             }
 
@@ -240,12 +333,8 @@ impl OrganicBrain {
                 };
                 if src != h {
                     let d = (fast_rand(&mut seed, MAX_DELAY) + 1) as u8;
-                    neurons[h].synapses.push(BrainSynapse {
-                        source: src as u32,
-                        weight: if in_column { 0.08 } else { 0.05 },
-                        delay: d,
-                        last_pre_tick: 0, eligibility: 0.0,
-                    });
+                    let w = if in_column { 0.08 } else { 0.05 };
+                    neurons[h].synapses.push(BrainSynapse::new(src as u32, w, d));
                 }
             }
         }
@@ -254,19 +343,13 @@ impl OrganicBrain {
         for o in (input_pop + hidden_pop)..total {
             for _ in 0..synapses_per.max(4) {
                 let src = input_pop + fast_rand(&mut seed, hidden_pop);
-                neurons[o].synapses.push(BrainSynapse {
-                    source: src as u32, weight: 0.25, delay: 1,
-                    last_pre_tick: 0, eligibility: 0.0,
-                });
+                neurons[o].synapses.push(BrainSynapse::new(src as u32, 0.25, 1));
             }
             // Lateral inhibition within output
             for _ in 0..2 {
                 let src = input_pop + hidden_pop + fast_rand(&mut seed, output_pop);
                 if src != o {
-                    neurons[o].synapses.push(BrainSynapse {
-                        source: src as u32, weight: -0.3, delay: 1,
-                        last_pre_tick: 0, eligibility: 0.0,
-                    });
+                    neurons[o].synapses.push(BrainSynapse::new(src as u32, -0.3, 1));
                 }
             }
         }
@@ -497,9 +580,9 @@ impl OrganicBrain {
     fn train_autoregressive(&mut self, input_text: &str, output_text: &str, surprise: f32) {
         // Reset volatile state for a clean autoregressive trial.
         for n in &mut self.neurons {
-            n.potential = 0.0;
+            n.potential = 0;
             n.fired = false;
-            n.spike_history = [false; SPIKE_HISTORY_LEN];
+            n.spike_history = 0;
             n.history_idx = 0;
         }
 
@@ -547,9 +630,9 @@ impl OrganicBrain {
         n_ticks: usize,
     ) {
         for n in &mut self.neurons {
-            n.potential = 0.0;
+            n.potential = 0;
             n.fired = false;
-            n.spike_history = [false; SPIKE_HISTORY_LEN];
+            n.spike_history = 0;
             n.history_idx = 0;
         }
 
@@ -740,8 +823,14 @@ impl OrganicBrain {
                         d > 0 && d <= MAX_DELAY && fired_history.get(d)
                             .map(|hs| hs.contains(&s.source)).unwrap_or(false)
                     });
-                    if !has_external && !has_arriving && neuron.potential < 0.01 && !neuron.fired {
-                        for syn in &mut neuron.synapses { syn.eligibility *= 0.9; }
+                    if !has_external && !has_arriving
+                        && neuron.potential_f32() < 0.01 && !neuron.fired
+                    {
+                        // Decay eligibility traces. Quantized; multiply
+                        // in f32 then re-quantize.
+                        for syn in &mut neuron.synapses {
+                            syn.set_elig_f32(syn.elig_f32() * 0.9);
+                        }
                         return;
                     }
                 }
@@ -763,30 +852,30 @@ impl OrganicBrain {
                     let d = syn.delay as usize;
                     let arrived = d > 0 && d <= MAX_DELAY && fired_history.get(d)
                         .map(|hs| hs.contains(&syn.source)).unwrap_or(false);
+                    let w = syn.weight_f32();
                     if arrived {
-                        total_input += syn.weight;
-                        syn.last_pre_tick = tick.saturating_sub(syn.delay as u64);
-                        if syn.weight > 0.0 { syn.eligibility = 1.0; }
+                        total_input += w;
+                        syn.last_pre_tick = (tick.saturating_sub(syn.delay as u64)) as u32;
+                        if w > 0.0 { syn.set_elig_f32(1.0); }
                     }
-                    syn.eligibility *= 0.9;
+                    syn.set_elig_f32(syn.elig_f32() * 0.9);
                 }
 
-                // Multiplicative leak + integration
-                neuron.potential *= 0.85;
-                neuron.potential += total_input;
-                if neuron.potential < 0.0 { neuron.potential = 0.0; }
+                // Multiplicative leak + integration (in f32 for precision,
+                // re-quantized once at the end of the integration step).
+                let mut p = neuron.potential_f32();
+                p *= 0.85;
+                p += total_input;
+                if p < 0.0 { p = 0.0; }
 
                 // Per-column content-dependent attention gain. Hidden
                 // neurons are scaled by their column's gain, computed from
                 // similarity between the current input frame and the
-                // column's learned attention key. This is what makes
-                // attention CONTENT-DEPENDENT — the same neuron is
-                // amplified or suppressed based on what's in the input
-                // right now, not just whether anything is in the input.
+                // column's learned attention key.
                 if i >= input_pop && i < input_pop + hidden_pop {
                     let col = (i - input_pop) / column_size.max(1);
                     if col < column_gains.len() {
-                        neuron.potential *= column_gains[col];
+                        p *= column_gains[col];
                     }
                 }
 
@@ -794,7 +883,7 @@ impl OrganicBrain {
                 // Clamped firings let train_spiking force output neurons to
                 // fire so STDP can wire their incoming synapses, even when
                 // weights are too weak to drive natural firing.
-                let threshold_fired = neuron.potential >= threshold;
+                let threshold_fired = p >= threshold;
                 let clamped = match output_clamp {
                     Some(mask) if i >= output_offset => {
                         let local = i - output_offset;
@@ -803,21 +892,25 @@ impl OrganicBrain {
                     _ => false,
                 };
                 let fired = threshold_fired || clamped;
-                if fired { neuron.potential = reset; }
+                if fired { p = reset; }
+                neuron.set_potential_f32(p);
                 neuron.fired = fired;
                 neuron.record_spike(fired);
-                if fired { neuron.last_fire_tick = tick; }
+                if fired { neuron.last_fire_tick = tick as u32; }
 
                 // Three-factor STDP (only during training).
                 // Learning rate scaled by surprise — surprising transitions carry
                 // more weight, predictable ones reinforce only weakly.
                 if learn && fired {
                     for syn in &mut neuron.synapses {
-                        if syn.weight > 0.0 && syn.eligibility > 0.1 && syn.last_pre_tick > 0 {
-                            let dt = tick - syn.last_pre_tick;
+                        let w = syn.weight_f32();
+                        let elig = syn.elig_f32();
+                        if w > 0.0 && elig > 0.1 && syn.last_pre_tick > 0 {
+                            let dt = (tick as u32).saturating_sub(syn.last_pre_tick);
                             if dt > 0 && dt < 8 {
-                                syn.weight += base_lr * syn.eligibility * (1.0 - dt as f32 / 8.0);
-                                if syn.weight > 2.0 { syn.weight = 2.0; }
+                                let dw = base_lr * elig * (1.0 - dt as f32 / 8.0);
+                                let new_w = (w + dw).min(2.0);
+                                syn.set_weight_f32(new_w);
                             }
                         }
                     }
@@ -927,9 +1020,9 @@ impl OrganicBrain {
 
         let output_start = self.input_pop + self.hidden_pop;
         for i in output_start..(output_start + self.output_pop) {
-            self.neurons[i].potential = 0.0;
+            self.neurons[i].potential = 0;
             self.neurons[i].fired = false;
-            self.neurons[i].spike_history = [false; SPIKE_HISTORY_LEN];
+            self.neurons[i].spike_history = 0;
         }
 
         // --- Attention gain modulation (before dynamics) ---
@@ -945,7 +1038,8 @@ impl OrganicBrain {
             for (i, &g) in gains.iter().enumerate() {
                 let h = self.input_pop + i;
                 if h < self.neurons.len() {
-                    self.neurons[h].potential *= g;
+                    let new_p = self.neurons[h].potential_f32() * g;
+                    self.neurons[h].set_potential_f32(new_p);
                 }
             }
         }
@@ -1107,7 +1201,7 @@ impl OrganicBrain {
             .count();
         let avg_weight: f32 = {
             let all_weights: Vec<f32> = self.neurons.iter()
-                .flat_map(|n| n.synapses.iter().map(|s| s.weight))
+                .flat_map(|n| n.synapses.iter().map(|s| s.weight_f32()))
                 .collect();
             if all_weights.is_empty() { 0.0 }
             else { all_weights.iter().sum::<f32>() / all_weights.len() as f32 }
@@ -1215,9 +1309,9 @@ mod tests {
     /// from learning.
     fn reset_volatile_state(brain: &mut OrganicBrain) {
         for n in &mut brain.neurons {
-            n.potential = 0.0;
+            n.potential = 0;
             n.fired = false;
-            n.spike_history = [false; SPIKE_HISTORY_LEN];
+            n.spike_history = 0;
             n.history_idx = 0;
         }
     }
@@ -1281,7 +1375,8 @@ mod tests {
             for &i in indices {
                 let n = &brain.neurons[output_start + i];
                 for s in &n.synapses {
-                    if s.weight > 0.0 { sum += s.weight; count += 1; }
+                    let w = s.weight_f32();
+                if w > 0.0 { sum += w; count += 1; }
                 }
             }
             if count == 0 { 0.0 } else { sum / count as f32 }
@@ -1572,8 +1667,8 @@ mod tests {
 
         let drive = |brain: &mut OrganicBrain, q: &str| {
             for n in &mut brain.neurons {
-                n.potential = 0.0; n.fired = false;
-                n.spike_history = [false; SPIKE_HISTORY_LEN]; n.history_idx = 0;
+                n.potential = 0; n.fired = false;
+                n.spike_history = 0; n.history_idx = 0;
             }
             let input = brain.encode_to_spikes(q);
             brain.run_ticks(&input, 6, false);
@@ -1615,8 +1710,8 @@ mod tests {
         // measure what the readout has learned, not what HDC stored.
         let input = brain.encode_to_spikes("hi");
         for n in &mut brain.neurons {
-            n.potential = 0.0; n.fired = false;
-            n.spike_history = [false; SPIKE_HISTORY_LEN]; n.history_idx = 0;
+            n.potential = 0; n.fired = false;
+            n.spike_history = 0; n.history_idx = 0;
         }
         brain.run_ticks(&input, 6, false);
 
