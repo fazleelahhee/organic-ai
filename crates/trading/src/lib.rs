@@ -414,7 +414,14 @@ impl TradingBrain {
             history: std::collections::VecDeque::new(),
             history_capacity: 5000,
             recency_half_life: 1000.0,
-            max_position_fraction: 0.25,
+            // Conservative default: 10% of capital max per trade.
+            // Empirical backtest with 25% cap showed catastrophic
+            // single-trade losses (Spot ETF miss: -3.75% capital from
+            // a single 25% position with 15% adverse move). Real
+            // trading systems use 1-5%. 10% is the upper end for
+            // strategies confident in their edge — most should set
+            // lower via the public field.
+            max_position_fraction: 0.10,
             prediction_log: self_assessment::PredictionLog::new(),
         }
     }
@@ -1052,6 +1059,22 @@ impl TradingBrain {
     /// Compute suggested position sizing from direction + confidence +
     /// anomaly + outcome distribution. Returns a value in [-max, +max]
     /// that the caller's risk-management layer can scale further.
+    ///
+    /// Loss-aversion design: position sizing has THREE haircuts beyond
+    /// the basic edge × confidence formula:
+    ///   1. Anomaly factor (1 - anomaly): on novel events, scale down.
+    ///   2. Opposition factor (1 - opposing_p × 2): when distribution
+    ///      has meaningful counter-evidence, scale down dramatically.
+    ///   3. Confidence floor: very low confidence trades get zero size.
+    ///
+    /// Why three factors and not one: empirical backtest showed that
+    /// 55.6% hit rate with WIN/LOSS RATIO 0.26 is a NET LOSING strategy.
+    /// Single high-confidence miss (Spot ETF approved, -15% move while
+    /// holding +0.25 max position = -3.75% capital loss) erased 7
+    /// winning trades. Counter-evidence-aware sizing addresses exactly
+    /// this failure mode: when the brain has high confidence but
+    /// counter-evidence exists in the distribution, it should not size
+    /// like an unanimous call.
     fn compute_position_sizing(
         &self,
         direction: Direction,
@@ -1068,14 +1091,37 @@ impl TradingBrain {
         }.max(0.0).clamp(0.0, 1.0);
         rationale.push(format!("edge={:.2}", edge));
 
-        // Anomaly halves the maximum size — unfamiliar territory means
-        // lower sizing even when distribution disagrees. This mirrors
-        // common discretionary trading practice ("sit on hands when
-        // markets do something I haven't seen before").
+        // Anomaly factor: scale down on novel events. (1 - anomaly/2)
+        // is the historical setting — full anomaly halves position.
+        // Stronger penalty would crush wins on novel-but-correct calls
+        // (most trading edges are in novel territory).
         let anomaly_factor = (1.0 - anomaly * 0.5).clamp(0.0, 1.0);
         rationale.push(format!("anomaly_factor={:.2}", anomaly_factor));
 
-        let raw = edge * confidence * anomaly_factor;
+        // Opposition factor: only triggers when counter-evidence is
+        // STRONG (>0.20). A 70/30 split is the danger zone where
+        // confidence looks high but 30% of similar events went the
+        // other way. Below 0.20 opposing, normal sizing — most trades
+        // shouldn't be downscaled just because the distribution isn't
+        // 100% unanimous.
+        // At opposing 0.20: factor 1.0 (no penalty)
+        // At opposing 0.35: factor 0.7
+        // At opposing 0.50: factor 0.4 (significant penalty)
+        let opposing = match direction {
+            Direction::Up => dist.p_down,
+            Direction::Down => dist.p_up,
+            Direction::Flat => 0.0,
+        };
+        let excess_opposing = (opposing - 0.20).max(0.0);
+        let opposition_factor = (1.0 - excess_opposing * 2.0).clamp(0.0, 1.0);
+        rationale.push(format!("opposition_factor={:.2}", opposition_factor));
+
+        // Confidence floor: below 0.4, no trade. Hard cutoff stops
+        // marginal calls from accumulating exposure.
+        let conf_factor = if confidence < 0.4 { 0.0 } else { confidence };
+        rationale.push(format!("conf_factor={:.2}", conf_factor));
+
+        let raw = edge * conf_factor * anomaly_factor * opposition_factor;
         let capped = raw.min(self.max_position_fraction);
         rationale.push(format!("raw={:.3}", raw));
         rationale.push(format!("capped={:.3}", capped));

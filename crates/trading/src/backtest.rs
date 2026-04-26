@@ -35,6 +35,10 @@ pub struct EventResult {
     /// Number of similar past patterns the brain found (proxy for
     /// "how much grounding did this prediction have").
     pub n_similar: usize,
+    /// Recommended position size for this event (from Analysis).
+    pub position_size: f32,
+    /// Realized P&L for this event = position_size × signed magnitude.
+    pub pnl: f32,
 }
 
 /// Aggregated backtest results.
@@ -59,6 +63,38 @@ pub struct BacktestReport {
     pub mean_anomaly_test: f32,
     /// Per-event details for diagnostic inspection.
     pub events: Vec<EventResult>,
+    /// P&L-aware metrics. Computed by simulating trades using the
+    /// recommended position_sizing.fraction from each Analysis. The
+    /// metric that ACTUALLY matters for trading: a 51% hit-rate
+    /// strategy with favorable win/loss ratio is profitable; a 70%
+    /// hit-rate strategy with unfavorable ratio is not.
+    pub pnl: PnlMetrics,
+}
+
+#[derive(Debug, Clone)]
+pub struct PnlMetrics {
+    /// Total P&L as a fraction of starting capital. +0.10 = +10% over
+    /// the test period.
+    pub total_return: f32,
+    /// Sharpe-like ratio: mean per-trade return / stddev per-trade
+    /// return. Annualization is left to the caller (depends on trade
+    /// frequency).
+    pub sharpe_per_trade: f32,
+    /// Max drawdown: largest peak-to-trough decline in cumulative P&L
+    /// over the test period.
+    pub max_drawdown: f32,
+    /// Number of profitable trades.
+    pub winning_trades: usize,
+    /// Number of losing trades.
+    pub losing_trades: usize,
+    /// Mean win size (positive trades only).
+    pub mean_win: f32,
+    /// Mean loss size (negative trades only, returned as positive).
+    pub mean_loss: f32,
+    /// Win/loss ratio: mean_win / mean_loss. >1 = average win is
+    /// bigger than average loss. Combined with hit rate, gives
+    /// expected value.
+    pub win_loss_ratio: f32,
 }
 
 impl BacktestReport {
@@ -82,14 +118,25 @@ impl BacktestReport {
         s.push_str(&format!("Mean conf on hits:   {:.2}\n", self.mean_confidence_on_hits));
         s.push_str(&format!("Mean conf on misses: {:.2}\n", self.mean_confidence_on_misses));
         s.push_str(&format!("Mean anomaly on test: {:.2}\n", self.mean_anomaly_test));
+        s.push_str(&format!("\n--- P&L (trades using suggested position sizing) ---\n"));
+        s.push_str(&format!("Total return:    {:+.2}% of capital\n",
+            self.pnl.total_return * 100.0));
+        s.push_str(&format!("Sharpe (per trade): {:+.3}\n", self.pnl.sharpe_per_trade));
+        s.push_str(&format!("Max drawdown:    {:.2}% of capital\n",
+            self.pnl.max_drawdown * 100.0));
+        s.push_str(&format!("Winners / Losers: {} / {}  (mean win {:.3}, mean loss {:.3})\n",
+            self.pnl.winning_trades, self.pnl.losing_trades,
+            self.pnl.mean_win, self.pnl.mean_loss));
+        s.push_str(&format!("Win/loss ratio:  {:.2}\n", self.pnl.win_loss_ratio));
         s.push_str("\n--- Per-event ---\n");
         for e in &self.events {
             let mark = if e.hit { "✓" } else { "✗" };
             let note = if e.abstained { " [abstain]" } else { "" };
             s.push_str(&format!(
-                "{} {} ({}): pred={:?} actual={:?} conf={:.2} anom={:.2} sim={}{}\n",
+                "{} {} ({}): pred={:?} actual={:?} conf={:.2} anom={:.2} sim={} pos={:+.3} pnl={:+.4}{}\n",
                 mark, e.date, e.label, e.predicted, e.actual,
-                e.confidence, e.anomaly_score, e.n_similar, note));
+                e.confidence, e.anomaly_score, e.n_similar,
+                e.position_size, e.pnl, note));
         }
         s
     }
@@ -235,15 +282,24 @@ pub fn run_backtest(
     }
 
     // Evaluate on test set. Each event gets a fresh `analyze()` call.
+    // P&L: simulated by taking the recommended position_size and the
+    // actual realized return. Sign of return reflects actual direction.
     let mut results: Vec<EventResult> = Vec::with_capacity(test.len());
     for ev in test {
         let analysis: Analysis = tb.analyze(&ev.state);
         let predicted = analysis.direction;
         let actual = ev.outcome.direction;
         let hit = predicted == actual;
-        // Abstained = brain returned Flat AND confidence is low. Genuine
-        // Flat predictions from the distribution are NOT abstentions.
         let abstained = predicted == Direction::Flat && analysis.confidence < 0.3;
+        let position_size = analysis.position_sizing.fraction;
+        // Signed realized return: +magnitude for Up, -magnitude for Down,
+        // 0 for Flat. Position * realized_return = P&L.
+        let realized = match actual {
+            Direction::Up => ev.outcome.magnitude as f32,
+            Direction::Down => -(ev.outcome.magnitude as f32),
+            Direction::Flat => 0.0,
+        };
+        let pnl = position_size * realized;
         results.push(EventResult {
             label: ev.label.to_string(),
             date: ev.date.to_string(),
@@ -254,6 +310,8 @@ pub fn run_backtest(
             anomaly_score: analysis.anomaly_score,
             abstained,
             n_similar: analysis.similar_patterns.len(),
+            position_size,
+            pnl,
         });
     }
 
@@ -280,6 +338,8 @@ pub fn run_backtest(
     let mean_anomaly_test = if results.is_empty() { 0.0 }
         else { results.iter().map(|r| r.anomaly_score).sum::<f32>() / results.len() as f32 };
 
+    let pnl = compute_pnl_metrics(&results);
+
     BacktestReport {
         n_train: train.len(),
         n_test,
@@ -292,6 +352,54 @@ pub fn run_backtest(
         mean_confidence_on_misses,
         mean_anomaly_test,
         events: results,
+        pnl,
+    }
+}
+
+/// Compute Sharpe + drawdown + win/loss stats from per-event P&L.
+fn compute_pnl_metrics(events: &[EventResult]) -> PnlMetrics {
+    let pnls: Vec<f32> = events.iter().map(|e| e.pnl).collect();
+    let total_return: f32 = pnls.iter().sum();
+
+    let mean = if pnls.is_empty() { 0.0 }
+        else { total_return / pnls.len() as f32 };
+    let variance: f32 = if pnls.len() < 2 { 0.0 }
+        else {
+            pnls.iter().map(|p| (p - mean).powi(2)).sum::<f32>()
+                / (pnls.len() - 1) as f32
+        };
+    let stddev = variance.sqrt();
+    let sharpe_per_trade = if stddev < 1e-9 { 0.0 } else { mean / stddev };
+
+    // Max drawdown: walk cumulative P&L, track high-water mark, biggest
+    // gap below it.
+    let mut cum = 0.0_f32;
+    let mut peak = 0.0_f32;
+    let mut max_dd = 0.0_f32;
+    for p in &pnls {
+        cum += p;
+        if cum > peak { peak = cum; }
+        let dd = peak - cum;
+        if dd > max_dd { max_dd = dd; }
+    }
+
+    let wins: Vec<f32> = pnls.iter().copied().filter(|p| *p > 0.0).collect();
+    let losses: Vec<f32> = pnls.iter().copied().filter(|p| *p < 0.0).collect();
+    let mean_win = if wins.is_empty() { 0.0 }
+        else { wins.iter().sum::<f32>() / wins.len() as f32 };
+    let mean_loss = if losses.is_empty() { 0.0 }
+        else { -losses.iter().sum::<f32>() / losses.len() as f32 };
+    let win_loss_ratio = if mean_loss < 1e-9 { 0.0 } else { mean_win / mean_loss };
+
+    PnlMetrics {
+        total_return,
+        sharpe_per_trade,
+        max_drawdown: max_dd,
+        winning_trades: wins.len(),
+        losing_trades: losses.len(),
+        mean_win,
+        mean_loss,
+        win_loss_ratio,
     }
 }
 
