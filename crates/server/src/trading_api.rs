@@ -18,6 +18,7 @@
 use axum::{Extension, Json, http::StatusCode};
 use organic_trading::{TradingBrain, MarketState, Outcome, Analysis};
 use organic_trading::self_assessment::SelfAssessment;
+use organic_trading::health::HealthReport;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -75,4 +76,32 @@ pub async fn self_assessment(
 ) -> Json<SelfAssessment> {
     let tb = tb.lock().await;
     Json(tb.self_assessment())
+}
+
+/// Production health check. Scans for the long-running failure modes:
+/// NaN/Inf, oversized buffers, stale calibration, anomaly saturation,
+/// excessive unscored prediction backlog. Returns a HealthReport with
+/// per-finding severity (Info/Warning/Critical). Side-effect-free.
+///
+/// Recommended polling: every 5-15 minutes. Alert any Critical
+/// immediately.
+pub async fn health(
+    Extension(tb): Extension<TradingState>,
+) -> Json<HealthReport> {
+    let tb = tb.lock().await;
+    Json(tb.health_check())
+}
+
+/// Auto-repair handler. Trims oversized buffers, zeros NaN/Inf,
+/// purges stale unscored predictions. Returns the post-repair health
+/// report. Idempotent, but call sparingly — clean-up has cost and
+/// shouldn't run on every request.
+///
+/// Suggested cadence: hourly cron, or after a Warning-level health
+/// finding fires.
+pub async fn auto_repair(
+    Extension(tb): Extension<TradingState>,
+) -> Json<HealthReport> {
+    let mut tb = tb.lock().await;
+    Json(tb.auto_repair())
 }

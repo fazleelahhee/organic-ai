@@ -95,6 +95,19 @@ pub struct PnlMetrics {
     /// bigger than average loss. Combined with hit rate, gives
     /// expected value.
     pub win_loss_ratio: f32,
+    /// Profit factor: total_wins / |total_losses|. Industry standard.
+    ///   > 1.0 = profitable strategy
+    ///   1.0   = breakeven
+    ///   < 1.0 = losing strategy
+    /// More robust than hit rate because it accounts for magnitude.
+    /// A 30% hit-rate strategy with profit factor 2.0 is far better
+    /// than a 70% hit-rate strategy with profit factor 0.6.
+    pub profit_factor: f32,
+    /// Expected value per trade as fraction of capital. Computed as
+    /// (p_win × mean_win) - (p_loss × mean_loss). Positive = each
+    /// trade is positive-expectation; negative = each trade bleeds
+    /// capital on average.
+    pub expected_value_per_trade: f32,
 }
 
 impl BacktestReport {
@@ -128,6 +141,11 @@ impl BacktestReport {
             self.pnl.winning_trades, self.pnl.losing_trades,
             self.pnl.mean_win, self.pnl.mean_loss));
         s.push_str(&format!("Win/loss ratio:  {:.2}\n", self.pnl.win_loss_ratio));
+        s.push_str(&format!("Profit factor:   {:.2}  ({})\n",
+            self.pnl.profit_factor,
+            if self.pnl.profit_factor >= 1.0 { "profitable" } else { "losing" }));
+        s.push_str(&format!("Expected value:  {:+.4} per trade\n",
+            self.pnl.expected_value_per_trade));
         s.push_str("\n--- Per-event ---\n");
         for e in &self.events {
             let mark = if e.hit { "✓" } else { "✗" };
@@ -385,11 +403,28 @@ fn compute_pnl_metrics(events: &[EventResult]) -> PnlMetrics {
 
     let wins: Vec<f32> = pnls.iter().copied().filter(|p| *p > 0.0).collect();
     let losses: Vec<f32> = pnls.iter().copied().filter(|p| *p < 0.0).collect();
+    let total_wins: f32 = wins.iter().sum();
+    let total_losses_abs: f32 = -losses.iter().sum::<f32>();
     let mean_win = if wins.is_empty() { 0.0 }
-        else { wins.iter().sum::<f32>() / wins.len() as f32 };
+        else { total_wins / wins.len() as f32 };
     let mean_loss = if losses.is_empty() { 0.0 }
-        else { -losses.iter().sum::<f32>() / losses.len() as f32 };
+        else { total_losses_abs / losses.len() as f32 };
     let win_loss_ratio = if mean_loss < 1e-9 { 0.0 } else { mean_win / mean_loss };
+
+    // Profit factor: industry-standard profitability metric.
+    // > 1.0 = profitable, < 1.0 = losing. Robust to hit-rate skew
+    // because it weighs by magnitude.
+    let profit_factor = if total_losses_abs < 1e-9 {
+        if total_wins > 0.0 { f32::INFINITY } else { 0.0 }
+    } else {
+        total_wins / total_losses_abs
+    };
+
+    // Expected value per trade.
+    let n = events.len() as f32;
+    let p_win = if n > 0.0 { wins.len() as f32 / n } else { 0.0 };
+    let p_loss = if n > 0.0 { losses.len() as f32 / n } else { 0.0 };
+    let expected_value_per_trade = p_win * mean_win - p_loss * mean_loss;
 
     PnlMetrics {
         total_return,
@@ -400,6 +435,8 @@ fn compute_pnl_metrics(events: &[EventResult]) -> PnlMetrics {
         mean_win,
         mean_loss,
         win_loss_ratio,
+        profit_factor,
+        expected_value_per_trade,
     }
 }
 

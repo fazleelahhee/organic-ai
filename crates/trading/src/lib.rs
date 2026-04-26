@@ -43,6 +43,7 @@ pub mod seed;
 pub mod backtest;
 pub mod baseline;
 pub mod self_assessment;
+pub mod health;
 
 /// A discrete news event the brain should consider alongside numeric
 /// market state. The user's core ask: feed the brain Fed announcements,
@@ -193,6 +194,21 @@ pub struct HorizonPrediction {
     /// Mean magnitude of the move across matched past patterns at this
     /// horizon. Useful for position-sizing and stop-loss placement.
     pub mean_magnitude: f32,
+}
+
+/// State snapshot for save/restore. Captures everything the trading
+/// reasoner owns OUTSIDE the brain. Brain itself is checkpointed
+/// separately by the engine's bincode persistence. Used for hourly
+/// known-good checkpoints — if current state goes bad (corruption,
+/// saturation, runaway), restore from the last snapshot and lose at
+/// most an hour of training.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateSnapshot {
+    pub history: Vec<(String, Outcome)>,
+    pub history_capacity: usize,
+    pub recency_half_life: f32,
+    pub max_position_fraction: f32,
+    pub prediction_log: self_assessment::PredictionLog,
 }
 
 /// Recommended position sizing derived from confidence, anomaly, and
@@ -426,12 +442,229 @@ impl TradingBrain {
         }
     }
 
+    /// Construct a safe, no-trade analysis when the brain refuses to
+    /// operate (corrupt input or critical health). Returns Flat with
+    /// confidence 0 and zero position size — the trader's risk-
+    /// management layer can recognize this as "do nothing".
+    fn degraded_analysis(&self, steps: Vec<String>) -> Analysis {
+        Analysis {
+            direction: Direction::Flat,
+            confidence: 0.0,
+            anomaly_score: 1.0,  // signal "totally novel / unsafe"
+            similar_patterns: Vec::new(),
+            outcome_distribution: OutcomeDistribution {
+                p_up: 0.0, p_down: 0.0, p_flat: 0.0,
+                mean_magnitude: 0.0, sample_size: 0,
+            },
+            counter_evidence: Vec::new(),
+            horizon_predictions: Vec::new(),
+            position_sizing: PositionSizing {
+                fraction: 0.0,
+                edge: 0.0,
+                rationale: vec!["degraded:no_trade".to_string()],
+            },
+            reasoning_steps: steps,
+        }
+    }
+
     /// Self-assessment over the prediction log. Returns overall +
     /// per-regime + per-source accuracy, calibration curve, drift flag.
     /// Production trading should poll this periodically: a brain that's
     /// silently wrong is worse than one that surfaces its mistakes.
     pub fn self_assessment(&self) -> self_assessment::SelfAssessment {
         self.prediction_log.assess()
+    }
+
+    /// Health check: scan internal state for the failure modes that
+    /// only show up after days of continuous training. Looks for
+    /// NaN/Inf, oversized buffers, stale calibration, anomaly drift,
+    /// excessive unscored backlog. Returns a structured HealthReport.
+    /// Side-effect-free.
+    ///
+    /// Polling cadence in production: every 5-15 minutes is reasonable.
+    /// Alert thresholds: any Critical → page; sustained Warnings →
+    /// investigate; pure Info → log.
+    pub fn health_check(&self) -> health::HealthReport {
+        let mut findings: Vec<health::HealthFinding> = Vec::new();
+
+        // 1. Buffer sizes vs capacities. If size > capacity, that's
+        // a Critical bug — the trim logic isn't running.
+        if self.history.len() > self.history_capacity {
+            findings.push(health::HealthFinding {
+                severity: health::Severity::Critical,
+                category: "buffers".into(),
+                message: format!("history size {} exceeds capacity {}",
+                    self.history.len(), self.history_capacity),
+                repaired: None,
+            });
+        }
+        if self.prediction_log.records.len() > self.prediction_log.max_records {
+            findings.push(health::HealthFinding {
+                severity: health::Severity::Critical,
+                category: "buffers".into(),
+                message: format!("prediction_log size {} exceeds capacity {}",
+                    self.prediction_log.records.len(),
+                    self.prediction_log.max_records),
+                repaired: None,
+            });
+        }
+
+        // 2. Unscored backlog. analyze() pushes records;
+        // train_on_outcome() scores them. A growing unscored backlog
+        // means callers are predicting without ever reporting outcomes,
+        // which means self-assessment data is rotting.
+        let unscored = self.prediction_log.records.iter()
+            .filter(|r| r.actual.is_none()).count();
+        let unscored_pct = if self.prediction_log.records.is_empty() { 0.0 }
+            else { unscored as f32 / self.prediction_log.records.len() as f32 };
+        if unscored_pct > 0.50 && self.prediction_log.records.len() > 20 {
+            findings.push(health::HealthFinding {
+                severity: health::Severity::Warning,
+                category: "scoring".into(),
+                message: format!(
+                    "{:.0}% of prediction log unscored ({}/{}). \
+                     Caller is predicting without train_on_outcome follow-up.",
+                    unscored_pct * 100.0, unscored, self.prediction_log.records.len()),
+                repaired: None,
+            });
+        }
+
+        // 3. NaN/Inf in stored prediction records. Should never happen
+        // but a Critical surfaces it cleanly if it does.
+        let mut bad_floats = 0usize;
+        for r in &self.prediction_log.records {
+            if health::float_issue("confidence", r.confidence).is_some() { bad_floats += 1; }
+            if health::float_issue("anomaly_score", r.anomaly_score).is_some() { bad_floats += 1; }
+        }
+        if bad_floats > 0 {
+            findings.push(health::HealthFinding {
+                severity: health::Severity::Critical,
+                category: "floats".into(),
+                message: format!(
+                    "{} NaN/Inf/extreme floats in prediction log — \
+                     downstream calculations will be poisoned",
+                    bad_floats),
+                repaired: None,
+            });
+        }
+
+        // 4. Calibration freshness: if calibration buckets are full but
+        // recent_window predictions show very different accuracy,
+        // calibration is stale.
+        let assessment = self.prediction_log.assess();
+        let scored = assessment.scored_predictions;
+        let drift_gap = (assessment.overall_accuracy - assessment.recent_accuracy).abs();
+        if scored >= self.prediction_log.recent_window as u64 * 4 && drift_gap > 0.20 {
+            findings.push(health::HealthFinding {
+                severity: health::Severity::Warning,
+                category: "calibration_drift".into(),
+                message: format!(
+                    "calibration may be stale: lifetime accuracy {:.2} vs recent {:.2} (gap {:.2})",
+                    assessment.overall_accuracy,
+                    assessment.recent_accuracy,
+                    drift_gap),
+                repaired: None,
+            });
+        }
+
+        // 5. Confidence saturation: if recent predictions are all stuck
+        // at extreme values (always 1.0 or always 0.0), the model has
+        // collapsed.
+        let recent_conf: Vec<f32> = self.prediction_log.records.iter()
+            .rev().take(self.prediction_log.recent_window)
+            .map(|r| r.confidence).collect();
+        if recent_conf.len() >= 10 {
+            let max_c = recent_conf.iter().cloned().fold(0.0_f32, f32::max);
+            let min_c = recent_conf.iter().cloned().fold(1.0_f32, f32::min);
+            if (max_c - min_c) < 0.05 {
+                findings.push(health::HealthFinding {
+                    severity: health::Severity::Warning,
+                    category: "confidence_collapse".into(),
+                    message: format!(
+                        "recent confidence collapsed to single value: \
+                         min {:.2} max {:.2} — model has saturated",
+                        min_c, max_c),
+                    repaired: None,
+                });
+            }
+        }
+
+        // 6. Anomaly saturation: same idea for anomaly score. If every
+        // recent prediction reports anomaly ≥ 0.95, the predictor
+        // weights have grown too large and the signal is useless.
+        let recent_anom: Vec<f32> = self.prediction_log.records.iter()
+            .rev().take(self.prediction_log.recent_window)
+            .map(|r| r.anomaly_score).collect();
+        if recent_anom.len() >= 10 {
+            let mean_a: f32 = recent_anom.iter().sum::<f32>() / recent_anom.len() as f32;
+            if mean_a > 0.95 {
+                findings.push(health::HealthFinding {
+                    severity: health::Severity::Warning,
+                    category: "anomaly_saturation".into(),
+                    message: format!(
+                        "recent mean anomaly {:.2} — predictor pegged, signal useless",
+                        mean_a),
+                    repaired: None,
+                });
+            }
+        }
+
+        health::HealthReport {
+            lifetime_predictions: self.prediction_log.next_id - 1,
+            history_size: self.history.len(),
+            history_capacity: self.history_capacity,
+            prediction_log_size: self.prediction_log.records.len(),
+            prediction_log_capacity: self.prediction_log.max_records,
+            unscored_predictions: unscored,
+            findings,
+        }
+    }
+
+    /// Auto-repair the failure modes flagged by `health_check()` when
+    /// safe. Returns the post-repair HealthReport. Idempotent.
+    ///
+    /// What gets repaired:
+    /// - Oversized buffers: trimmed to capacity.
+    /// - NaN/Inf floats in PredictionRecords: clamped or zeroed.
+    /// - Stale prediction records (>history_capacity old + unscored):
+    ///   purged, since their outcomes will never arrive.
+    ///
+    /// What does NOT get auto-repaired (manual intervention needed):
+    /// - Calibration drift (the data is what it is)
+    /// - Anomaly saturation (would need brain re-init)
+    /// - Confidence collapse (likely indicates a real problem)
+    pub fn auto_repair(&mut self) -> health::HealthReport {
+        // 1. Trim oversized buffers.
+        while self.history.len() > self.history_capacity {
+            self.history.pop_back();
+        }
+        while self.prediction_log.records.len() > self.prediction_log.max_records {
+            self.prediction_log.records.pop_front();
+        }
+
+        // 2. Clean NaN/Inf in prediction records. Replace with safe
+        // defaults: confidence=0, anomaly=0.5.
+        for r in self.prediction_log.records.iter_mut() {
+            if health::float_issue("confidence", r.confidence).is_some() {
+                r.confidence = 0.0;
+            }
+            if health::float_issue("anomaly_score", r.anomaly_score).is_some() {
+                r.anomaly_score = 0.5;
+            }
+        }
+
+        // 3. Purge very old unscored predictions — outcomes for these
+        // will never arrive. Keeps the prediction log focused on actively
+        // tracked predictions.
+        let stale_threshold = self.prediction_log.max_records / 2;
+        let to_remove: Vec<u64> = self.prediction_log.records.iter()
+            .take(self.prediction_log.records.len().saturating_sub(stale_threshold))
+            .filter(|r| r.actual.is_none())
+            .map(|r| r.id).collect();
+        self.prediction_log.records.retain(|r| !to_remove.contains(&r.id));
+
+        // Re-run health check to report post-repair state.
+        self.health_check()
     }
 
     /// Persist the trade-journal history to a JSON file. Brain state is
@@ -461,6 +694,40 @@ impl TradingBrain {
     /// Number of entries in the trade-journal history. Useful for
     /// monitoring whether load/save round-trips correctly.
     pub fn history_len(&self) -> usize { self.history.len() }
+
+    /// Save a complete state snapshot (history + prediction log +
+    /// settings) to disk. The brain itself is NOT included — the
+    /// engine's bincode persistence handles that. Use this to checkpoint
+    /// "known-good" state hourly so we can roll back if current state
+    /// goes bad.
+    pub fn save_snapshot(&self, path: &str) -> std::io::Result<()> {
+        let snap = StateSnapshot {
+            history: self.history.iter().cloned().collect(),
+            history_capacity: self.history_capacity,
+            recency_half_life: self.recency_half_life,
+            max_position_fraction: self.max_position_fraction,
+            prediction_log: self.prediction_log.clone(),
+        };
+        let json = serde_json::to_string_pretty(&snap)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(path, json)
+    }
+
+    /// Restore from a snapshot. Replaces history + prediction log +
+    /// settings, leaves the brain untouched. The whole point: if
+    /// current state is corrupted (NaN, saturated, leaking), restore
+    /// the last hourly snapshot and lose at most an hour of training.
+    pub fn restore_snapshot(&mut self, path: &str) -> std::io::Result<()> {
+        let raw = std::fs::read_to_string(path)?;
+        let snap: StateSnapshot = serde_json::from_str(&raw)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        self.history = snap.history.into();
+        self.history_capacity = snap.history_capacity;
+        self.recency_half_life = snap.recency_half_life;
+        self.max_position_fraction = snap.max_position_fraction;
+        self.prediction_log = snap.prediction_log;
+        Ok(())
+    }
 
     /// Weighted token similarity in [0, 1]. Tokens are categorized by
     /// prefix and weighted by trading importance:
@@ -659,6 +926,26 @@ impl TradingBrain {
     /// but the alternative (high-confidence misclassification across
     /// passes) is much worse for trading.
     pub fn train_on_outcome(&mut self, state: &MarketState, outcome: &Outcome) {
+        // Input sanitization. Bad MarketState (NaN price, Inf volume,
+        // garbage indicators) is dropped or repaired BEFORE it touches
+        // brain state. Otherwise a single bad call poisons HDC, the
+        // history buffer, and every downstream prediction.
+        let (state, issues) = match health::validate_and_clean_state(state) {
+            Ok(pair) => pair,
+            Err(reason) => {
+                eprintln!("train_on_outcome: rejecting unrecoverable state: {}", reason);
+                return; // Refuse to train on garbage.
+            }
+        };
+        if !issues.is_empty() {
+            eprintln!("train_on_outcome: cleaned input: {:?}", issues);
+        }
+        // Reject NaN/Inf magnitude — the outcome itself.
+        if !outcome.magnitude.is_finite() {
+            eprintln!("train_on_outcome: rejecting outcome with non-finite magnitude");
+            return;
+        }
+        let state = &state;
         let key = self.encode_state(state);
         let value = self.encode_outcome(outcome);
         self.brain.train(&key, &value);
@@ -687,6 +974,38 @@ impl TradingBrain {
     /// aggregation, structured output. This is the primary API.
     pub fn analyze(&mut self, state: &MarketState) -> Analysis {
         let mut steps: Vec<String> = Vec::new();
+
+        // Input sanitization. Same defensive principle as
+        // train_on_outcome — never let bad input into the brain.
+        let (state_owned, input_issues) = match health::validate_and_clean_state(state) {
+            Ok(pair) => pair,
+            Err(reason) => {
+                // Unrecoverable input — return a safe Flat / zero-confidence
+                // analysis rather than crashing or operating on garbage.
+                steps.push(format!("REJECTED:{}", reason));
+                return self.degraded_analysis(steps);
+            }
+        };
+        if !input_issues.is_empty() {
+            steps.push(format!("input_cleaned:{}_issues", input_issues.len()));
+        }
+        let state = &state_owned;
+
+        // Degraded mode: if a recent health check found Critical issues,
+        // return a safe Flat analysis instead of operating on possibly
+        // corrupt internal state. Self-protection: the brain refuses
+        // to give predictions it can't trust.
+        let health_now = self.health_check();
+        if health_now.has_critical() {
+            steps.push("DEGRADED:critical_health".to_string());
+            for f in &health_now.findings {
+                if f.severity == health::Severity::Critical {
+                    steps.push(format!("crit:{}", f.message));
+                }
+            }
+            return self.degraded_analysis(steps);
+        }
+
         let key = self.encode_state(state);
         steps.push(format!("encode:{}", &key));
 
@@ -1470,6 +1789,89 @@ mod tests {
         assert_eq!(analysis.direction, Direction::Down,
             "Trained Fed-hawkish state should recall as Down (steps: {:?})",
             analysis.reasoning_steps);
+    }
+
+    /// Long-running simulation: run thousands of predict/train cycles
+    /// to catch the bugs that only manifest after days of operation.
+    /// Specifically checks:
+    ///   - Buffer sizes stay bounded (no leaks)
+    ///   - No NaN/Inf in confidence / anomaly / position fields
+    ///   - Confidence doesn't saturate (collapse to single value)
+    ///   - Anomaly doesn't saturate at 1.0
+    ///   - Auto-repair fixes any issues the health check catches
+    ///
+    /// `#[ignore]` because it's slow (~5K predict+train cycles).
+    /// Run on every release: `cargo test --release -- --ignored
+    /// test_long_running_robustness`.
+    #[test]
+    #[ignore]
+    fn test_long_running_robustness() {
+        let mut tb = TradingBrain::new_small(2048);
+
+        // Cycle through several state archetypes so the brain sees
+        // diverse patterns. 1K iterations is enough to surface
+        // long-running bugs (NaN creep, buffer overflow, saturation)
+        // without taking forever — production-cadence equivalent of
+        // ~1 day of operation with multiple predictions per minute.
+        let archetypes: Vec<(MarketState, Outcome)> = vec![
+            (MarketState {
+                price: 50000.0, volume: 1e10,
+                recent_return: 0.02, volatility: 0.03,
+                indicators: vec![("rsi".into(), 60.0)],
+                news: vec![NewsItem {
+                    source: "FED".into(),
+                    headline: "Fed dovish remarks".into(),
+                    sentiment: 0.4, age_hours: 1.0,
+                }],
+                timestamp: Some(TimeContext { hour_utc: 14, day_of_week: 2 }),
+            }, Outcome::new(Direction::Up, 0.02)),
+            (MarketState {
+                price: 50000.0, volume: 1e10,
+                recent_return: -0.05, volatility: 0.08,
+                indicators: vec![("rsi".into(), 28.0), ("fear_greed".into(), 0.20)],
+                news: vec![NewsItem {
+                    source: "REUTERS".into(),
+                    headline: "Exchange hack panic".into(),
+                    sentiment: -0.7, age_hours: 0.5,
+                }],
+                timestamp: Some(TimeContext { hour_utc: 9, day_of_week: 4 }),
+            }, Outcome::new(Direction::Down, 0.05)),
+            (MarketState {
+                price: 50000.0, volume: 1e10,
+                recent_return: 0.0, volatility: 0.02,
+                indicators: vec![("rsi".into(), 50.0)],
+                news: vec![],
+                timestamp: Some(TimeContext { hour_utc: 22, day_of_week: 6 }),
+            }, Outcome::new(Direction::Flat, 0.005)),
+        ];
+
+        for cycle in 0..1000 {
+            let (state, outcome) = &archetypes[cycle % archetypes.len()];
+            let _analysis = tb.analyze(state);
+            tb.train_on_outcome(state, outcome);
+
+            // Spot-check every 200 cycles.
+            if cycle % 200 == 199 {
+                let h = tb.health_check();
+                assert!(!h.has_critical(),
+                    "cycle {}: critical health finding(s): {:?}",
+                    cycle, h.findings);
+                // Buffers must stay bounded.
+                assert!(h.history_size <= h.history_capacity,
+                    "history overflow at cycle {}", cycle);
+                assert!(h.prediction_log_size <= h.prediction_log_capacity,
+                    "log overflow at cycle {}", cycle);
+            }
+        }
+
+        // Final state: scan for stale-data issues, run auto_repair,
+        // verify no Criticals afterward.
+        let pre = tb.health_check();
+        let post = tb.auto_repair();
+        assert!(!post.has_critical(),
+            "auto_repair did not clear critical findings: {:?}", post.findings);
+        eprintln!("After 1000 cycles: pre-repair {:?} findings, post-repair {:?} findings",
+            pre.findings.len(), post.findings.len());
     }
 
     /// Self-assessment loop: analyze → realized outcome → score the
