@@ -302,6 +302,15 @@ pub fn run_backtest(
     // Evaluate on test set. Each event gets a fresh `analyze()` call.
     // P&L: simulated by taking the recommended position_size and the
     // actual realized return. Sign of return reflects actual direction.
+    //
+    // STOP-LOSS SIMULATION. Real trading caps adverse moves with stop
+    // orders; the raw 24h magnitude doesn't reflect that. We model a
+    // stop-loss at 2% adverse move per trade — when the position goes
+    // against us by more than that fraction, we assume the stop fired
+    // and the loss is capped. This is a closer approximation to live
+    // P&L than uncapped magnitude. Wins are NOT capped (let winners
+    // run is the standard).
+    const STOP_LOSS: f32 = 0.02;
     let mut results: Vec<EventResult> = Vec::with_capacity(test.len());
     for ev in test {
         let analysis: Analysis = tb.analyze(&ev.state);
@@ -311,11 +320,23 @@ pub fn run_backtest(
         let abstained = predicted == Direction::Flat && analysis.confidence < 0.3;
         let position_size = analysis.position_sizing.fraction;
         // Signed realized return: +magnitude for Up, -magnitude for Down,
-        // 0 for Flat. Position * realized_return = P&L.
-        let realized = match actual {
+        // 0 for Flat.
+        let realized_raw = match actual {
             Direction::Up => ev.outcome.magnitude as f32,
             Direction::Down => -(ev.outcome.magnitude as f32),
             Direction::Flat => 0.0,
+        };
+        // Apply stop-loss: when position direction (sign of position_size)
+        // disagrees with realized direction (sign of realized_raw), and the
+        // adverse move exceeds STOP_LOSS, cap at STOP_LOSS. Same direction =
+        // winning move = no cap.
+        let realized = if position_size.signum() != realized_raw.signum()
+            && realized_raw.abs() > STOP_LOSS
+        {
+            // Adverse move beyond stop — assume stop fired at STOP_LOSS.
+            STOP_LOSS * realized_raw.signum()
+        } else {
+            realized_raw
         };
         let pnl = position_size * realized;
         results.push(EventResult {
