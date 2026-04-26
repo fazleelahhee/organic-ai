@@ -12,3 +12,6 @@ target/
 # Node / Web visualizer
 node_modules/
 web/dist/
+
+# Brain save files (large, machine-local)
+data/
