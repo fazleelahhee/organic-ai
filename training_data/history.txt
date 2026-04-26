@@ -1,0 +1,80 @@
+1. Who was the first president of the United States?|George Washington
+2. In what year did World War II end?|1945
+3. Who discovered America in 1492?|Christopher Columbus
+4. What ancient wonder was located in Alexandria, Egypt?|The Lighthouse of Alexandria (Pharos)
+5. Who was the first Emperor of Rome?|Augustus (Octavian)
+6. What year did the Berlin Wall fall?|1989
+7. Who led the Indian independence movement through nonviolent resistance?|Mahatma Gandhi
+8. What empire was ruled by Genghis Khan?|The Mongol Empire
+9. In what year did the French Revolution begin?|1789
+10. Who was the British Prime Minister during most of World War II?|Winston Churchill
+11. What ancient civilization built the pyramids of Giza?|The Ancient Egyptians
+12. What year did the Titanic sink?|1912
+13. Who wrote the Communist Manifesto alongside Friedrich Engels?|Karl Marx
+14. What was the name of the first successful English settlement in America?|Jamestown
+15. Who was the first woman to fly solo across the Atlantic Ocean?|Amelia Earhart
+16. What empire was known as "the empire on which the sun never sets"?|The British Empire
+17. In what year did the American Civil War begin?|1861
+18. Who was the leader of the Soviet Union during World War II?|Joseph Stalin
+19. What ancient city was destroyed by the eruption of Mount Vesuvius in 79 AD?|Pompeii
+20. Who painted the ceiling of the Sistine Chapel?|Michelangelo
+21. What was the longest-lasting empire in history?|The Roman Empire (including Byzantine)
+22. Who was the first person to circumnavigate the globe?|Ferdinand Magellan's expedition (completed by Juan Sebastián Elcano)
+23. What year did Japan bomb Pearl Harbor?|1941
+24. Who founded the Ottoman Empire?|Osman I
+25. What treaty ended World War I?|The Treaty of Versailles
+26. Who was the Egyptian queen known for her relationships with Julius Caesar and Mark Antony?|Cleopatra VII
+27. In what year did the Russian Revolution take place?|1917
+28. What was the name of the trade route connecting China to the Mediterranean?|The Silk Road
+29. Who was the first African American to serve as President of the United States?|Barack Obama
+30. What civilization built Machu Picchu?|The Inca civilization
+31. In what year did the atomic bomb drop on Hiroshima?|1945
+32. Who was known as the "Maid of Orléans"?|Joan of Arc
+33. What was the primary cause of the Irish Potato Famine?|A potato blight (Phytophthora infestans)
+34. Who unified Germany in 1871?|Otto von Bismarck
+35. What year did the United States declare independence?|1776
+36. Who was the last Tsar of Russia?|Nicholas II
+37. What ancient civilization is credited with inventing democracy?|Ancient Greece (Athens)
+38. Who led the Haitian Revolution?|Toussaint Louverture
+39. What was the Manhattan Project?|The secret U.S. program to develop the atomic bomb during World War II
+40. Who was the first Tudor monarch of England?|Henry VII
+41. What year did apartheid officially end in South Africa?|1994
+42. Who was the Aztec emperor when the Spanish arrived?|Montezuma II (Moctezuma)
+43. What event triggered World War I?|The assassination of Archduke Franz Ferdinand
+44. Who built the Hanging Gardens of Babylon?|King Nebuchadnezzar II
+45. What year did the Korean War begin?|1950
+46. Who was the founder of the Maurya Empire in India?|Chandragupta Maurya
+47. What was the Renaissance?|A cultural and intellectual movement originating in 14th-century Italy marking the transition from medieval to modern times
+48. Who was the first Emperor of China?|Qin Shi Huang
+49. In what year did the Spanish Armada attempt to invade England?|1588
+50. What civilization developed cuneiform writing?|The Sumerians
+51. Who led the liberation of several South American countries from Spanish rule?|Simón Bolívar
+52. What year did the Cold War officially end?|1991
+53. Who was the king of England who had six wives?|Henry VIII
+54. What was the Black Death?|A devastating plague pandemic that swept through Europe in the 14th century
+55. Who founded the Zulu Empire in southern Africa?|Shaka Zulu
+56. In what year did the Ottoman Empire fall?|1922
+57. What was the Magna Carta?|A charter of rights agreed to by King John of England in 1215 limiting royal authority
+58. Who was the first person to reach the South Pole?|Roald Amundsen
+59. What ancient civilization built the Parthenon?|The Ancient Greeks (Athenians)
+60. In what year did the Mexican Revolution begin?|1910
+61. Who was the famous Carthaginian general who crossed the Alps with elephants?|Hannibal Barca
+62. What was the Reformation?|A 16th-century religious movement led by Martin Luther that split Western Christianity
+63. Who was the Sun King of France?|Louis XIV
+64. What year did the Suez Canal open?|1869
+65. Who led the Bolshevik Revolution?|Vladimir Lenin
+66. What ancient empire was centered in modern-day Iran and founded by Cyrus the Great?|The Achaemenid (Persian) Empire
+67. In what year did Nelson Mandela become president of South Africa?|1994
+68. What was the Marshall Plan?|A U.S. program providing economic aid to rebuild Western Europe after World War II
+69. Who was the Viking explorer believed to have reached North America around 1000 AD?|Leif Erikson
+70. What year did the Cuban Missile Crisis occur?|1962
+71. Who was the Macedonian king who conquered much of the known world by age 30?|Alexander the Great
+72. What was the Meiji Restoration?|The 1868 political revolution in Japan that restored imperial rule and modernized the country
+73. Who was the first female pharaoh of Egypt?|Hatshepsut
+74. In what year did the Rwandan genocide occur?|1994
+75. What was the Dreyfus Affair?|A political scandal in France involving the wrongful conviction of Jewish army officer Alfred Dreyfus for treason
+76. Who established the Mali Empire as a major power in West Africa?|Sundiata Keita
+77. What year did the Great Fire of London occur?|1666
+78. Who was the leader of the Confederate States during the American Civil War?|Jefferson Davis
+79. What ancient civilization created the first known code of laws?|The Babylonians (Code of Hammurabi)
+80. In what year did the Chernobyl nuclear disaster occur?|1986

@@ -1,0 +1,100 @@
+If all birds have feathers, and a robin is a bird, does a robin have feathers?|Yes, a robin has feathers.
+If all mammals breathe air, and a whale is a mammal, does a whale breathe air?|Yes, a whale breathes air.
+If all squares are rectangles, and this shape is a square, is it a rectangle?|Yes, it is a rectangle.
+If all doctors have medical degrees, and Maria is a doctor, does Maria have a medical degree?|Yes, Maria has a medical degree.
+If all even numbers are divisible by 2, and 16 is an even number, is 16 divisible by 2?|Yes, 16 is divisible by 2.
+If all reptiles are cold-blooded, and a lizard is a reptile, is a lizard cold-blooded?|Yes, a lizard is cold-blooded.
+If all planets orbit a star, and Earth is a planet, does Earth orbit a star?|Yes, Earth orbits a star.
+If no fish can fly, and a salmon is a fish, can a salmon fly?|No, a salmon cannot fly.
+If all triangles have three sides, and this shape has three sides, could it be a triangle?|Yes, it could be a triangle, though having three sides alone does not guarantee it since other properties must also hold.
+If all employees must wear badges, and Tom is an employee, must Tom wear a badge?|Yes, Tom must wear a badge.
+If all metals conduct electricity, and copper is a metal, does copper conduct electricity?|Yes, copper conducts electricity.
+If all citizens over 18 can vote, and Jane is a citizen who is 25, can Jane vote?|Yes, Jane can vote.
+If no insects have bones, and a beetle is an insect, does a beetle have bones?|No, a beetle does not have bones.
+If all books in this library are fiction, and this book is from this library, is it fiction?|Yes, it is fiction.
+If all students in the class passed the exam, and Alex is a student in the class, did Alex pass?|Yes, Alex passed the exam.
+If all roses in this garden are red, and this flower is a rose from this garden, what color is it?|It is red.
+If every car in the lot is electric, and this vehicle is a car from the lot, is it electric?|Yes, it is electric.
+If all members of the club speak French, and Pierre is a member, does Pierre speak French?|Yes, Pierre speaks French.
+If no vegetarians eat meat, and Priya is a vegetarian, does Priya eat meat?|No, Priya does not eat meat.
+If all items on the top shelf are fragile, and this vase is on the top shelf, is it fragile?|Yes, the vase is fragile.
+Hand is to glove as foot is to what?|Sock
+Painter is to brush as writer is to what?|Pen
+Fish is to water as bird is to what?|Air
+Eye is to see as ear is to what?|Hear
+Hunger is to eat as thirst is to what?|Drink
+Bee is to hive as bird is to what?|Nest
+Chapter is to book as scene is to what?|Play
+Steering wheel is to car as handlebars are to what?|Bicycle
+Bark is to dog as meow is to what?|Cat
+Teacher is to school as doctor is to what?|Hospital
+Petal is to flower as leaf is to what?|Tree
+Calf is to cow as puppy is to what?|Dog
+Oar is to boat as pedal is to what?|Bicycle
+Thermometer is to temperature as clock is to what?|Time
+Flour is to bread as grape is to what?|Wine
+If you heat ice, what happens?|It melts and turns into water.
+If a plant does not receive sunlight for an extended period, what happens?|The plant will weaken and eventually die because it cannot photosynthesize.
+If you remove all the air from a sealed container, what is created?|A vacuum is created.
+If the demand for a product increases but the supply stays the same, what happens to the price?|The price increases.
+If you mix red paint and blue paint, what color do you get?|Purple.
+If Earth stopped rotating, what would happen to the day-night cycle?|One side would have permanent daylight and the other permanent darkness.
+If a car runs out of fuel while driving, what happens?|The engine stops and the car comes to a halt.
+If you cut a magnet in half, what do you get?|Two smaller magnets, each with its own north and south pole.
+If ocean temperatures continue to rise, what happens to coral reefs?|They undergo bleaching and can die.
+If a country prints excessive amounts of money without economic growth, what occurs?|Inflation increases and the currency loses value.
+If you drop a ball from a tall building, what force pulls it downward?|Gravity pulls it downward.
+If bees were to go extinct, what would happen to crop pollination?|Crop pollination would drastically decline, threatening food production.
+If you apply a force to an object on a frictionless surface, what happens?|The object accelerates and continues moving indefinitely until another force acts on it.
+If the moon disappeared, what would happen to ocean tides?|Tides would become much weaker, driven only by the sun.
+If you increase the voltage in a circuit while resistance stays constant, what happens to the current?|The current increases proportionally.
+What comes next: 2, 4, 6, 8, ?|10
+What comes next: 3, 6, 12, 24, ?|48
+What comes next: 1, 1, 2, 3, 5, 8, ?|13
+What comes next: 100, 90, 80, 70, ?|60
+What comes next: 1, 4, 9, 16, 25, ?|36
+What comes next: 2, 6, 18, 54, ?|162
+What comes next: 5, 10, 20, 40, ?|80
+What comes next: 1, 3, 6, 10, 15, ?|21
+What comes next: 7, 14, 21, 28, ?|35
+What comes next: 256, 128, 64, 32, ?|16
+What comes next: 1, 8, 27, 64, ?|125
+What comes next: 0, 1, 3, 6, 10, ?|15
+What comes next: 2, 3, 5, 7, 11, 13, ?|17
+What comes next: 1, 2, 4, 7, 11, ?|16
+What comes next: 81, 27, 9, 3, ?|1
+If it rains, then the ground is wet. The ground is wet. Did it rain?|Not necessarily. The ground could be wet for other reasons, such as a sprinkler or spilled water. This is the fallacy of affirming the consequent.
+If it rains, then the ground is wet. It did not rain. Is the ground wet?|Not necessarily from rain, but it could be wet from other causes. We only know rain was not the cause.
+If it rains, then the ground is wet. The ground is not wet. Did it rain?|No, it did not rain. If it had rained, the ground would be wet.
+If you study hard, you will pass the exam. You did not pass the exam. Did you study hard?|No, you did not study hard, assuming the conditional is true.
+If the alarm sounds, then there is a fire. The alarm did not sound. Is there a fire?|Not necessarily. The alarm not sounding does not guarantee there is no fire; the alarm could be broken.
+If a shape is a square, then it has four equal sides. This shape has four equal sides. Is it a square?|Not necessarily. It could be a rhombus, which also has four equal sides.
+If the temperature drops below 0°C, water freezes. Water has frozen. Was the temperature below 0°C?|Most likely, but not certainly. Water can freeze at 0°C exactly, and pressure changes can also affect the freezing point.
+If you eat too much sugar, you will gain weight. You gained weight. Did you eat too much sugar?|Not necessarily. Weight gain can result from many factors, not just sugar intake.
+If a student is absent, they miss the lesson. The student missed the lesson. Were they absent?|Not necessarily. They could have been present but inattentive, or the lesson could have been canceled.
+If the battery is dead, the car will not start. The car did not start. Is the battery dead?|Not necessarily. The car could fail to start for other reasons like a faulty starter or empty fuel tank.
+If an animal is a dog, it is a mammal. This animal is a mammal. Is it a dog?|Not necessarily. Many animals are mammals without being dogs.
+If you press the power button, the computer turns on. The computer is on. Did you press the power button?|Not necessarily. Someone else may have turned it on, or it may have been scheduled to wake up.
+If it snows, the schools close. The schools are closed. Did it snow?|Not necessarily. Schools can close for holidays, maintenance, or other emergencies.
+If you water the plant, it will grow. The plant grew. Did you water it?|Not necessarily. Rain or someone else could have watered it.
+If the bridge is closed, traffic is diverted. Traffic is being diverted. Is the bridge closed?|Not necessarily. Traffic could be diverted for road work, an accident, or an event.
+All men are mortal. Socrates is a man. Therefore?|Socrates is mortal.
+All cats are animals. All animals need water. Therefore?|All cats need water.
+No reptiles are mammals. A snake is a reptile. Therefore?|A snake is not a mammal.
+All fruits contain seeds. An apple is a fruit. Therefore?|An apple contains seeds.
+All lawyers passed the bar exam. Sarah is a lawyer. Therefore?|Sarah passed the bar exam.
+Some birds can fly. Penguins are birds. Therefore?|Penguins may or may not be able to fly based on the premise alone. In reality, penguins cannot fly.
+All fish live in water. A trout is a fish. Therefore?|A trout lives in water.
+No children are allowed in the bar. Sam is a child. Therefore?|Sam is not allowed in the bar.
+All Olympic athletes train daily. Maria is an Olympic athlete. Therefore?|Maria trains daily.
+All vehicles with engines need fuel. A motorcycle has an engine. Therefore?|A motorcycle needs fuel.
+If x + 3 = 7, what is x?|x = 4
+If 2x = 12, what is x?|x = 6
+If x squared equals 49, what are the possible values of x?|x = 7 or x = -7
+If 3x - 5 = 10, what is x?|x = 5
+If a rectangle has a length of 8 and a width of 3, what is its area?|24 square units
+If you buy 5 items at $4 each and pay with a $50 bill, how much change do you receive?|$30
+If a train travels at 60 km/h for 3 hours, how far does it travel?|180 km
+If x/4 = 9, what is x?|x = 36
+If the sum of two numbers is 20 and one number is 8, what is the other number?|12
+If a circle has a radius of 5, what is its approximate area?|Approximately 78.54 square units, using the formula pi times r squared.

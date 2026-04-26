@@ -1,0 +1,50 @@
+1. If all dogs are animals and Rex is a dog, what is Rex?|Rex is an animal
+2. If it rains, the ground gets wet. The ground is wet. Did it definitely rain?|Not necessarily — something else could have made the ground wet
+3. A is taller than B, and B is taller than C. Who is the shortest?|C is the shortest
+4. If no fish can fly and a salmon is a fish, can a salmon fly?|No, a salmon cannot fly
+5. Book is to reading as fork is to what?|Eating
+6. If all roses are flowers and some flowers fade quickly, do all roses fade quickly?|Not necessarily — only some flowers fade quickly, and roses may or may not be among them
+7. If turning the key starts the car, and the car did not start, what can you conclude?|The key was not turned, or something else is preventing the car from starting
+8. Monday comes before Tuesday, and Tuesday comes before Wednesday. What comes before Wednesday?|Monday and Tuesday both come before Wednesday
+9. Pen is to writer as brush is to what?|Painter
+10. If all cats have tails and Whiskers is a cat, what does Whiskers have?|Whiskers has a tail
+11. A train leaves at 9 AM going 60 mph. Another leaves at 10 AM going 80 mph on the same route. Which will be ahead at 10 AM?|The first train, because the second just started
+12. If some birds can swim and all penguins are birds, can penguins necessarily swim?|Not from this logic alone — we only know some birds can swim, not which ones
+13. Eye is to seeing as ear is to what?|Hearing
+14. If no mammals are cold-blooded and a whale is a mammal, is a whale cold-blooded?|No, a whale is not cold-blooded
+15. If the battery is dead, the flashlight won't work. The flashlight isn't working. Is the battery definitely dead?|Not necessarily — there could be another reason the flashlight doesn't work
+16. All squares are rectangles. Is a rectangle necessarily a square?|No — all squares are rectangles, but not all rectangles are squares
+17. Seed is to tree as egg is to what?|Bird (or chicken)
+18. If P implies Q, and Q is false, what can you conclude about P?|P must also be false (modus tollens)
+19. Tom is older than Jane. Jane is older than Sam. Is Tom older than Sam?|Yes, Tom is older than Sam
+20. If every student passed the test and Alex is a student, did Alex pass?|Yes, Alex passed the test
+21. Ship is to ocean as airplane is to what?|Sky (or air)
+22. If some apples are red and all red things are colorful, what can you conclude?|Some apples are colorful
+23. There are five chairs in a row. Ben sits to the left of Amy. Amy sits in the middle. Where can Ben be?|Ben is in chair 1 or chair 2 (to the left of the middle chair 3)
+24. If it snows, school is cancelled. School is not cancelled. Did it snow?|No, it did not snow
+25. Glove is to hand as sock is to what?|Foot
+26. All dogs bark. Rex does not bark. What can you conclude?|Rex is not a dog
+27. If A is bigger than B, and C is bigger than A, which is the smallest?|B is the smallest
+28. Water is to ice as milk is to what?|Frozen milk (or cheese, as a transformed state)
+29. If eating too much causes a stomachache and John has a stomachache, did he eat too much?|Not necessarily — other things can cause a stomachache
+30. All prime numbers greater than 2 are odd. 7 is a prime number greater than 2. Is 7 odd?|Yes, 7 is odd
+31. Chapter is to book as episode is to what?|Series (or season)
+32. If no reptiles have fur and a lizard is a reptile, does a lizard have fur?|No, a lizard does not have fur
+33. Three of the four words belong together: apple, banana, carrot, grape. Which does not belong?|Carrot — the others are fruits, carrot is a vegetable
+34. If studying leads to good grades and good grades lead to scholarships, what does studying lead to?|Studying leads to scholarships (transitive reasoning)
+35. Helmet is to head as shield is to what?|Body
+36. If all managers attend the meeting and Sara did not attend, what can you conclude?|Sara is not a manager
+37. X is heavier than Y. Z is lighter than Y. Rank them from heaviest to lightest.|X, Y, Z
+38. If cutting down forests reduces oxygen and reduced oxygen harms health, what does cutting down forests do?|It harms health
+39. Steering wheel is to car as handlebars are to what?|Bicycle
+40. If only members can enter the club and Dave entered the club, what is Dave?|Dave is a member
+41. A factory produces 100 widgets per hour. How many does it produce in 30 minutes?|50 widgets
+42. If all metals conduct electricity and copper is a metal, does copper conduct electricity?|Yes, copper conducts electricity
+43. Thermometer is to temperature as clock is to what?|Time
+44. If some teachers are strict and Mr. Lee is a teacher, is Mr. Lee strict?|Not necessarily — only some teachers are strict
+45. If A causes B, and B causes C, and C is observed, did A definitely occur?|Not necessarily — C could have been caused by something other than B
+46. Scales are to fish as feathers are to what?|Birds
+47. If nothing illegal is permitted and jaywalking is illegal, is jaywalking permitted?|No, jaywalking is not permitted
+48. A snail moves slower than a rabbit. A rabbit moves slower than a cheetah. What moves fastest?|The cheetah
+49. If lack of sleep causes poor focus and poor focus causes mistakes, what does lack of sleep cause?|Mistakes
+50. Keyboard is to typing as microphone is to what?|Speaking (or recording)

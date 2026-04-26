@@ -1,0 +1,100 @@
+What is 2+3?|5
+What is 7+5?|12
+What is 9+4?|13
+What is 6+8?|14
+What is 11+7?|18
+What is 15+9?|24
+What is 23+18?|41
+What is 45+37?|82
+What is 68+54?|122
+What is 125+275?|400
+What is 347+658?|1005
+What is 1234+5678?|6912
+What is 9999+1?|10000
+What is 4500+3750?|8250
+What is 10+20+30?|60
+What is 9-4?|5
+What is 15-7?|8
+What is 20-13?|7
+What is 50-28?|22
+What is 100-45?|55
+What is 83-37?|46
+What is 200-125?|75
+What is 500-267?|233
+What is 1000-389?|611
+What is 7543-2891?|4652
+What is 10000-6543?|3457
+What is 2500-1750?|750
+What is 864-397?|467
+What is 5000-1234?|3766
+What is 999-111?|888
+What is 3 times 4?|12
+What is 7 times 6?|42
+What is 8 times 9?|72
+What is 5 times 12?|60
+What is 15 times 3?|45
+What is 11 times 11?|121
+What is 25 times 4?|100
+What is 13 times 7?|91
+What is 20 times 15?|300
+What is 50 times 12?|600
+What is 14 times 14?|196
+What is 33 times 3?|99
+What is 125 times 8?|1000
+What is 45 times 20?|900
+What is 99 times 11?|1089
+What is 250 times 4?|1000
+What is 75 times 12?|900
+What is 16 times 16?|256
+What is 30 times 30?|900
+What is 123 times 45?|5535
+What is 56 divided by 8?|7
+What is 72 divided by 9?|8
+What is 144 divided by 12?|12
+What is 100 divided by 4?|25
+What is 81 divided by 9?|9
+What is 150 divided by 5?|30
+What is 200 divided by 8?|25
+What is 360 divided by 12?|30
+What is 450 divided by 15?|30
+What is 1000 divided by 25?|40
+What is 625 divided by 25?|25
+What is 256 divided by 16?|16
+What is 729 divided by 27?|27
+What is 1200 divided by 40?|30
+What is 5000 divided by 125?|40
+What is 48+52?|100
+What is 375+625?|1000
+What is 88-29?|59
+What is 1500-873?|627
+What is 12 times 12?|144
+What is 9 times 9?|81
+What is 7 times 8?|56
+What is 6 times 6?|36
+What is 108 divided by 12?|9
+What is 96 divided by 8?|12
+What is 17+28?|45
+What is 63+89?|152
+What is 456+544?|1000
+What is 73-48?|25
+What is 312-198?|114
+What is 18 times 5?|90
+What is 24 times 25?|600
+What is 35 times 14?|490
+What is 210 divided by 7?|30
+What is 168 divided by 14?|12
+What is 55+45?|100
+What is 999+999?|1998
+What is 750-375?|375
+What is 4321-1234?|3087
+What is 15 times 15?|225
+What is 40 times 25?|1000
+What is 64 divided by 4?|16
+What is 900 divided by 30?|30
+What is 19+27?|46
+What is 444+556?|1000
+What is 600-245?|355
+What is 8 times 125?|1000
+What is 36 times 11?|396
+What is 2048 divided by 64?|32
+What is 3600 divided by 60?|60

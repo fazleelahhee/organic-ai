@@ -1,0 +1,50 @@
+1. What is a variable?|A named storage location in memory that holds a value
+2. What is a function?|A reusable block of code that performs a specific task and can be called by name
+3. What is a loop?|A control structure that repeats a block of code until a condition is met
+4. What is an array?|An ordered collection of elements stored in contiguous memory, accessed by index
+5. What is a string?|A sequence of characters used to represent text
+6. What is a boolean?|A data type that can only hold one of two values: true or false
+7. What is a conditional statement?|A statement that executes different code blocks based on whether a condition is true or false
+8. What is recursion?|A technique where a function calls itself to solve smaller instances of the same problem
+9. What is an integer?|A data type that represents whole numbers without decimal points
+10. What is a float?|A data type that represents numbers with decimal points
+11. What is a compiler?|A program that translates source code into machine code before execution
+12. What is an interpreter?|A program that executes source code line by line without prior compilation
+13. What is a class?|A blueprint for creating objects that defines properties and methods
+14. What is an object?|An instance of a class that contains data and behavior defined by its class
+15. What is inheritance?|A mechanism where a class derives properties and methods from a parent class
+16. What is encapsulation?|The practice of bundling data and methods together while restricting direct access to internal state
+17. What is polymorphism?|The ability of different types to respond to the same method call in different ways
+18. What is an API?|An Application Programming Interface that defines how software components communicate with each other
+19. What is a parameter?|A variable listed in a function definition that receives a value when the function is called
+20. What is an argument?|An actual value passed to a function when it is called
+21. What is a return value?|The output a function sends back to the code that called it
+22. What is a data type?|A classification that specifies what kind of value a variable can hold
+23. What is scope?|The region of code where a variable is accessible and can be referenced
+24. What is a constant?|A named value that cannot be changed after it is initially assigned
+25. What is a comment?|Text in source code that is ignored by the compiler or interpreter, used for documentation
+26. What is debugging?|The process of finding and fixing errors or bugs in code
+27. What is a syntax error?|An error caused by code that violates the grammatical rules of a programming language
+28. What is a runtime error?|An error that occurs while the program is executing
+29. What is a logic error?|An error where the program runs without crashing but produces incorrect results
+30. What is an operator?|A symbol that performs an operation on one or more operands, such as +, -, or ==
+31. What is a dictionary?|A data structure that stores key-value pairs for fast lookup by key
+32. What is a stack?|A data structure that follows Last-In-First-Out (LIFO) ordering for adding and removing elements
+33. What is a queue?|A data structure that follows First-In-First-Out (FIFO) ordering for adding and removing elements
+34. What is a linked list?|A data structure where each element contains a value and a reference to the next element
+35. What is an algorithm?|A step-by-step procedure for solving a problem or accomplishing a task
+36. What is Big O notation?|A mathematical notation that describes the upper bound of an algorithm's time or space complexity
+37. What is version control?|A system that tracks and manages changes to code over time
+38. What is a repository?|A storage location where code and its version history are kept
+39. What is a branch in version control?|An independent line of development that diverges from the main codebase
+40. What is a merge conflict?|A situation where two branches have competing changes that cannot be automatically combined
+41. What is an exception?|An event that disrupts the normal flow of a program, typically indicating an error
+42. What is a try-catch block?|A construct that attempts to execute code and handles any exceptions that occur
+43. What is null?|A special value representing the intentional absence of any object or value
+44. What is type casting?|The process of converting a value from one data type to another
+45. What is an index?|A numerical position used to access a specific element in an ordered collection
+46. What is iteration?|The process of repeatedly executing a block of code, typically over elements in a collection
+47. What is abstraction?|The concept of hiding complex implementation details and exposing only essential features
+48. What is a module?|A self-contained file of code that can be imported and reused in other programs
+49. What is a constructor?|A special method that initializes a new object when an instance of a class is created
+50. What is pseudocode?|An informal, human-readable description of an algorithm that is not tied to any specific programming language
