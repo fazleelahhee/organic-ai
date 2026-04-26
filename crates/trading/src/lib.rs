@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod seed;
 pub mod backtest;
+pub mod baseline;
 
 /// A discrete news event the brain should consider alongside numeric
 /// market state. The user's core ask: feed the brain Fed announcements,
