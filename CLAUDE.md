@@ -1,5 +1,10 @@
 # OrganicAI
 
+> **For future Claude sessions: read `WORKLOG.md` first.** It has
+> session-by-session history, key architectural decisions, things the
+> user has rejected, empirical findings, and what's pending — i.e. the
+> context you'd otherwise lose between sessions.
+
 ## Project Vision
 
 A fundamentally new kind of AI that learns organically — without training data,
