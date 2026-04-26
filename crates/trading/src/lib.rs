@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 pub mod seed;
 pub mod backtest;
 pub mod baseline;
+pub mod self_assessment;
 
 /// A discrete news event the brain should consider alongside numeric
 /// market state. The user's core ask: feed the brain Fed announcements,
@@ -381,6 +382,11 @@ pub struct TradingBrain {
     /// 0.25 = quarter-Kelly-style — conservative. Aggressive strategies
     /// might raise to 0.5; defensive ones lower to 0.10.
     pub max_position_fraction: f32,
+    /// Self-awareness layer: log of own predictions, scored against
+    /// realized outcomes when train_on_outcome arrives. Powers the
+    /// `self_assessment()` API — overall + per-regime + per-source
+    /// accuracy, calibration curve, drift detection.
+    pub prediction_log: self_assessment::PredictionLog,
 }
 
 impl Default for TradingBrain {
@@ -409,7 +415,16 @@ impl TradingBrain {
             history_capacity: 5000,
             recency_half_life: 1000.0,
             max_position_fraction: 0.25,
+            prediction_log: self_assessment::PredictionLog::new(),
         }
+    }
+
+    /// Self-assessment over the prediction log. Returns overall +
+    /// per-regime + per-source accuracy, calibration curve, drift flag.
+    /// Production trading should poll this periodically: a brain that's
+    /// silently wrong is worse than one that surfaces its mistakes.
+    pub fn self_assessment(&self) -> self_assessment::SelfAssessment {
+        self.prediction_log.assess()
     }
 
     /// Persist the trade-journal history to a JSON file. Brain state is
@@ -645,6 +660,12 @@ impl TradingBrain {
                 self.brain.train(&perturbed, &value);
             }
         }
+        // Self-assessment: if a recent unscored prediction matches this
+        // state's encoded key, record the realized direction so accuracy
+        // stats update automatically. Closes the predict→outcome loop
+        // without the caller needing to track prediction IDs explicitly.
+        self.prediction_log.score_by_key(&key, outcome.direction);
+
         // Append to the explainable trade-journal history. Older entries
         // drop off the back when capacity is exceeded — the reasoner
         // weights recent regime data more heavily, which matters in
@@ -935,6 +956,30 @@ impl TradingBrain {
         let position_sizing = self.compute_position_sizing(
             reasoned_direction, confidence, anomaly,
             &outcome_distribution, &mut steps);
+
+        // Self-assessment: log this prediction so we can score it later
+        // when the realized outcome arrives via train_on_outcome.
+        // Extracts regime tag and news source tags from the encoded key
+        // for per-regime / per-source accuracy stats.
+        let regime = key.split_whitespace()
+            .find(|t| t.starts_with("regime_"))
+            .unwrap_or("regime_unknown")
+            .to_string();
+        let news_sources: Vec<String> = key.split_whitespace()
+            .filter(|t| t.starts_with("src_"))
+            .map(|t| t.to_string())
+            .collect();
+        self.prediction_log.record(self_assessment::PredictionRecord {
+            id: 0, // assigned by record()
+            state_key: key.clone(),
+            regime,
+            news_sources,
+            predicted: reasoned_direction,
+            confidence,
+            anomaly_score: anomaly,
+            actual: None,
+            hit: None,
+        });
 
         Analysis {
             direction: reasoned_direction,
@@ -1366,6 +1411,46 @@ mod tests {
         assert_eq!(analysis.direction, Direction::Down,
             "Trained Fed-hawkish state should recall as Down (steps: {:?})",
             analysis.reasoning_steps);
+    }
+
+    /// Self-assessment loop: analyze → realized outcome → score the
+    /// prediction → assessment reflects the realized accuracy. This is
+    /// the closed feedback loop that makes the reasoner self-aware.
+    #[test]
+    fn test_self_assessment_round_trip() {
+        let mut tb = TradingBrain::new_small(2048);
+        let bull = MarketState {
+            price: 100.0, volume: 5000.0,
+            recent_return: 0.05, volatility: 0.02,
+            indicators: vec![("rsi".into(), 70.0)],
+            news: vec![NewsItem {
+                source: "FED".into(),
+                headline: "Fed dovish pivot rate cut signals".into(),
+                sentiment: 0.6, age_hours: 1.0,
+            }],
+            timestamp: Some(TimeContext { hour_utc: 18, day_of_week: 2 }),
+        };
+        // Train heavily so analyze recalls Up.
+        for _ in 0..30 {
+            tb.train_on_outcome(&bull, &Outcome::new(Direction::Up, 0.04));
+        }
+        // analyze() pushes a prediction record.
+        let analysis = tb.analyze(&bull);
+        assert_eq!(analysis.direction, Direction::Up);
+
+        // Now report a realized Up outcome via train_on_outcome — this
+        // should score the just-made prediction as a hit.
+        tb.train_on_outcome(&bull, &Outcome::new(Direction::Up, 0.05));
+
+        let a = tb.self_assessment();
+        assert!(a.scored_predictions >= 1);
+        assert!(a.overall_accuracy >= 0.5,
+            "Hit rate should reflect the scored hit, got {}", a.overall_accuracy);
+
+        // Per-source stats should record the FED source.
+        assert!(a.accuracy_by_source.keys().any(|k| k == "src_fed"));
+        // Per-regime should record overbought (rsi=70 + sentiment = euphoric? or overbought).
+        assert!(a.accuracy_by_regime.keys().any(|k| k.starts_with("regime_")));
     }
 
     /// History persistence: save_history → load_history must round-trip

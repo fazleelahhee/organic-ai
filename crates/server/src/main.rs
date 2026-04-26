@@ -128,6 +128,7 @@ async fn main() {
         .route("/api/trading/analyze", post(trading_api::analyze))
         .route("/api/trading/train", post(trading_api::train))
         .route("/api/trading/stats", get(trading_api::stats))
+        .route("/api/trading/self_assessment", get(trading_api::self_assessment))
         .nest_service("/", ServeDir::new("web"))
         .layer(CorsLayer::permissive())
         .layer(axum::Extension(request_queue))

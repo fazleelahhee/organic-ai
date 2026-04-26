@@ -17,6 +17,7 @@
 
 use axum::{Extension, Json, http::StatusCode};
 use organic_trading::{TradingBrain, MarketState, Outcome, Analysis};
+use organic_trading::self_assessment::SelfAssessment;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -63,4 +64,15 @@ pub async fn stats(
         history_capacity: tb.history_capacity,
         reasoning_passes: tb.reasoning_passes,
     })
+}
+
+/// Self-assessment endpoint — overall + per-regime + per-source
+/// accuracy, calibration curve, drift flag. The brain's track record,
+/// surfaced for the human / risk-management system to inspect.
+/// Production trading should poll this periodically.
+pub async fn self_assessment(
+    Extension(tb): Extension<TradingState>,
+) -> Json<SelfAssessment> {
+    let tb = tb.lock().await;
+    Json(tb.self_assessment())
 }
