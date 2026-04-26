@@ -214,7 +214,10 @@ mod tests {
     fn test_backtest_beats_random_baseline() {
         let events = historical_btc_events();
         // Use a larger brain (16K neurons) for the real eval — small
-        // brains are noisy on this multi-modal task.
+        // brains are noisy on this multi-modal task. 5 training repeats
+        // was empirically the sweet spot: more repeats just made the
+        // brain more confident on its existing (sometimes wrong) calls,
+        // worsening calibration without changing hit rate.
         let report = run_backtest(&events, 0.7, 5, 16384);
         eprintln!("{}", report.pretty());
 

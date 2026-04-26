@@ -1,8 +1,9 @@
 mod snapshot;
+mod trading_api;
 mod user_input;
 mod websocket;
 
-use axum::{routing::get, Router};
+use axum::{routing::{get, post}, Router};
 use organic_engine::simulation::{World, WorldConfig};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -102,12 +103,35 @@ async fn main() {
         }
     });
 
+    // Trading reasoner: dedicated TradingBrain with its own brain,
+    // separate from the organism-simulation brain. Loaded from disk
+    // history if a saved file exists at data/trading_history.json,
+    // else starts empty. Wrapped in Arc<Mutex<>> for handler sharing.
+    let trading_brain = {
+        // Use the same scale as the simulation brain so HDC + spiking
+        // capacity matches. For a smaller / faster trading-only deploy,
+        // use TradingBrain::new_small(N) here instead.
+        let mut tb = organic_trading::TradingBrain::new_small(16384);
+        let history_path = "data/trading_history.json";
+        if let Err(e) = tb.load_history(history_path) {
+            // Non-fatal: missing file on first run is expected.
+            eprintln!("trading_api: load_history({}) -> {}", history_path, e);
+        } else {
+            eprintln!("trading_api: loaded {} history entries", tb.history_len());
+        }
+        std::sync::Arc::new(tokio::sync::Mutex::new(tb))
+    };
+
     let app = Router::new()
         .route("/ws", get(websocket::ws_handler))
         .route("/api/message", axum::routing::post(user_input::send_message))
+        .route("/api/trading/analyze", post(trading_api::analyze))
+        .route("/api/trading/train", post(trading_api::train))
+        .route("/api/trading/stats", get(trading_api::stats))
         .nest_service("/", ServeDir::new("web"))
         .layer(CorsLayer::permissive())
         .layer(axum::Extension(request_queue))
+        .layer(axum::Extension(trading_brain))
         .with_state(snapshot_rx);
 
     println!("Server running at http://localhost:3000");

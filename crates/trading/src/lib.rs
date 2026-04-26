@@ -295,6 +295,13 @@ pub struct TradingBrain {
     /// when this is exceeded — the reasoner adapts to recent regimes
     /// rather than being weighed down by ancient data.
     pub history_capacity: usize,
+    /// Recency half-life in number of training samples. A pattern N
+    /// samples ago contributes weight `0.5 ^ (N / half_life)`. Larger
+    /// values = longer memory; smaller = faster adaptation to regime
+    /// shifts. Default 1000 = patterns from 1000 samples ago contribute
+    /// half as much as the most recent one. Set lower (e.g. 200) for
+    /// fast-moving markets, higher (5000+) for stable strategies.
+    pub recency_half_life: f32,
 }
 
 impl Default for TradingBrain {
@@ -321,6 +328,7 @@ impl TradingBrain {
             top_k_patterns: 5,
             history: std::collections::VecDeque::new(),
             history_capacity: 5000,
+            recency_half_life: 1000.0,
         }
     }
 
@@ -660,36 +668,44 @@ impl TradingBrain {
             .find(|t| t.starts_with("regime_"));
         let similarity_threshold = 0.15_f32;
 
+        // Recency-weighted similarity: multiply raw token similarity by
+        // exp(-position * ln(2) / half_life). Most recent entry (index 0)
+        // gets full weight; entry half_life-ago gets 0.5 weight; entry
+        // 2*half_life-ago gets 0.25 weight. Markets are non-stationary —
+        // patterns from years ago are less relevant than recent ones.
+        let half_life = self.recency_half_life.max(1.0);
+        let recency_weight = |idx: usize| -> f32 {
+            (-(idx as f32) * std::f32::consts::LN_2 / half_life).exp()
+        };
+
+        let make_match = |(idx, (past_key, past_outcome)): (usize, &(String, Outcome))| -> PatternMatch {
+            let raw_sim = Self::token_similarity(&key, past_key);
+            let weighted = raw_sim * recency_weight(idx);
+            PatternMatch {
+                state_key: past_key.clone(),
+                outcome: past_outcome.clone(),
+                similarity: weighted,
+            }
+        };
+
         let mut all_matches: Vec<PatternMatch> = if let Some(qr) = query_regime {
-            let same_regime: Vec<PatternMatch> = self.history.iter()
-                .filter(|(past, _)| past.split_whitespace().any(|t| t == qr))
-                .map(|(past_key, past_outcome)| PatternMatch {
-                    state_key: past_key.clone(),
-                    outcome: past_outcome.clone(),
-                    similarity: Self::token_similarity(&key, past_key),
-                })
+            let same_regime: Vec<PatternMatch> = self.history.iter().enumerate()
+                .filter(|(_, (past, _))| past.split_whitespace().any(|t| t == qr))
+                .map(make_match)
                 .collect();
             if !same_regime.is_empty() {
                 steps.push(format!("stratified:regime={},n={}", qr, same_regime.len()));
                 same_regime
             } else {
                 steps.push(format!("stratified:fallback_no_{}_history", qr));
-                self.history.iter()
-                    .map(|(past_key, past_outcome)| PatternMatch {
-                        state_key: past_key.clone(),
-                        outcome: past_outcome.clone(),
-                        similarity: Self::token_similarity(&key, past_key),
-                    })
+                self.history.iter().enumerate()
+                    .map(make_match)
                     .filter(|m| m.similarity >= similarity_threshold)
                     .collect()
             }
         } else {
-            self.history.iter()
-                .map(|(past_key, past_outcome)| PatternMatch {
-                    state_key: past_key.clone(),
-                    outcome: past_outcome.clone(),
-                    similarity: Self::token_similarity(&key, past_key),
-                })
+            self.history.iter().enumerate()
+                .map(make_match)
                 .filter(|m| m.similarity >= similarity_threshold)
                 .collect()
         };
@@ -715,16 +731,32 @@ impl TradingBrain {
         // realized history.
         let dist_direction = {
             let d = &outcome_distribution;
-            // Even a single matched past pattern is informative — a
-            // strict ">= 3" cutoff means novel events with limited
-            // historical coverage default to Flat, which is the wrong
-            // bias for trading (better to surface a tentative call with
-            // appropriate confidence than to abstain entirely).
             if d.sample_size >= 1 {
-                if d.p_up > d.p_down && d.p_up > d.p_flat { Some(Direction::Up) }
-                else if d.p_down > d.p_up && d.p_down > d.p_flat { Some(Direction::Down) }
-                else if d.p_flat > 0.5 { Some(Direction::Flat) }
-                else { None }
+                // Compute the winner and its margin over the runner-up.
+                // If max < 50% OR margin < 10%, the distribution is too
+                // split to commit to a direction — better to call Flat
+                // than to force a coin-flip prediction. Boring ML
+                // produces overconfident argmax even on 51/49 splits;
+                // this reasoner abstains when the data doesn't support
+                // a directional call.
+                let max_p = d.p_up.max(d.p_down).max(d.p_flat);
+                let second_max = if (d.p_up - max_p).abs() < 1e-6 {
+                    d.p_down.max(d.p_flat)
+                } else if (d.p_down - max_p).abs() < 1e-6 {
+                    d.p_up.max(d.p_flat)
+                } else {
+                    d.p_up.max(d.p_down)
+                };
+                let margin = max_p - second_max;
+                if max_p < 0.5 || margin < 0.10 {
+                    Some(Direction::Flat)
+                } else if d.p_up > d.p_down && d.p_up > d.p_flat {
+                    Some(Direction::Up)
+                } else if d.p_down > d.p_up && d.p_down > d.p_flat {
+                    Some(Direction::Down)
+                } else {
+                    Some(Direction::Flat)
+                }
             } else { None }
         };
         let reasoned_direction = match (final_direction, dist_direction) {

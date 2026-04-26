@@ -16,3 +16,4 @@ futures = "0.3"
 organic-tools = { path = "../tools" }
 organic-neuron = { path = "../neuron" }
 organic-network = { path = "../network" }
+organic-trading = { path = "../trading" }

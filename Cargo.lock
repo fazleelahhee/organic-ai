@@ -551,6 +551,7 @@ dependencies = [
  "organic-neuron",
  "organic-substrate",
  "organic-tools",
+ "organic-trading",
  "serde",
  "serde_json",
  "tokio",
