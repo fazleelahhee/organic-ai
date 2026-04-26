@@ -194,7 +194,23 @@ cde94da  feat(trading): production robustness layer + profit factor + comprehens
 9ae730b  feat(trading): semantic news encoding via Claude extraction + cache
 31f054e  feat(trading): position lifecycle — open / should_exit / reentry
 5434e94  docs: comprehensive README
+f507961  docs: WORKLOG.md — session history + context for future Claude loads
+34e5707  perf(server): trading brain → 4M neurons (was 16K test scale, ~500 MB instead of ~20 GB)
+f045ee4  perf(neuron): quantize brain types — i16 weights, u8 eligibility, bit-packed spike history
 ```
+
+### RAM-reduction milestones (2026-04)
+
+  - 4M-neuron switch in server: trading deployment was 20 GB at 80M
+    neuron scale, dropped to ~500 MB. HDC retrieval / self-assessment /
+    position sizing are size-independent, so no functional regression.
+  - Quantization layer in neuron crate: i16 weights, u8 eligibility,
+    u32 ticks, bit-packed spike history, i16 potential. Additional
+    ~50% RAM reduction. **4M trading brain now ~270 MB.** STDP
+    precision unaffected (typical updates round to 100-1500 quanta of
+    1/32767 resolution).
+  - **Net**: production trading deployment ~270 MB RAM. Save files
+    similarly compact. 80M research-scale brain ~14 GB (was ~28 GB).
 
 ---
 

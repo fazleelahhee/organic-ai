@@ -396,11 +396,18 @@ replacement.
 
 | Component | Minimum | Recommended |
 |---|---|---|
-| RAM | 16 GB (40M neurons) | 32 GB (80M neurons + comfort) |
+| RAM (trading, 4M-neuron quantized brain — default) | 1 GB | 4 GB |
+| RAM (research, 80M-neuron quantized brain) | 16 GB | 32 GB |
 | CPU | 4 cores | 8+ cores (rayon parallelism) |
 | Disk | 1 GB (no save) | 50 GB (with snapshots + cache) |
 | Network | Localhost only | LAN or Internet for data feeds |
 | GPU | None required | None benefits this architecture |
+
+The trading brain now defaults to 4M neurons + quantized types
+(i16 weights, u8 eligibility, bit-packed spike history). Production
+RAM footprint is ~270 MB. To run the full 80M research brain, edit
+`crates/server/src/main.rs` to use `TradingBrain::new()` instead of
+`new_small(4_000_000)`.
 
 The brain is **CPU-bound by design**. No GPU acceleration. This is
 intentional — biologically-inspired computing maps poorly to GPU
