@@ -45,6 +45,7 @@ fn news(source: &str, headline: &str, sentiment: f64, age_hours: f64) -> NewsIte
         headline: headline.to_string(),
         sentiment,
         age_hours,
+        extraction_tokens: Vec::new(),
     }
 }
 

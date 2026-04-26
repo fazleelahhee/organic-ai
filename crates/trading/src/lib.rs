@@ -44,6 +44,7 @@ pub mod backtest;
 pub mod baseline;
 pub mod self_assessment;
 pub mod health;
+pub mod news_composer;
 
 /// A discrete news event the brain should consider alongside numeric
 /// market state. The user's core ask: feed the brain Fed announcements,
@@ -67,6 +68,14 @@ pub struct NewsItem {
     /// and as an explicit token so the brain can learn "news within 1
     /// hour reacts differently than news from 24 hours ago."
     pub age_hours: f64,
+    /// Claude-extracted compositional tokens (act_/vrb_/obj_/mag_).
+    /// Populated by `TradingBrain::enrich_news()` ahead of analyze().
+    /// When present, encode_state emits these instead of bag-of-words
+    /// `w_<word>` tokens — brain gets semantic structure ("Fed cuts"
+    /// vs "Fed raises" share actor+object, differ on action) for free.
+    /// Empty = falls back to bag-of-words encoding.
+    #[serde(default)]
+    pub extraction_tokens: Vec<String>,
 }
 
 /// Optional time-of-day / calendar context. Intraday and weekly seasonality
@@ -416,6 +425,12 @@ pub struct TradingBrain {
     /// `self_assessment()` API — overall + per-regime + per-source
     /// accuracy, calibration curve, drift detection.
     pub prediction_log: self_assessment::PredictionLog,
+    /// Persistent cache of headline → Claude-extracted compositional
+    /// tokens (act_/vrb_/obj_/mag_). Each unique headline costs one
+    /// Claude call ever; subsequent encounters are HashMap lookups.
+    /// Used by `enrich_news()` to pre-populate `NewsItem.extraction_tokens`
+    /// before analyze() runs.
+    pub news_cache: news_composer::ExtractionCache,
 }
 
 impl Default for TradingBrain {
@@ -452,7 +467,31 @@ impl TradingBrain {
             // lower via the public field.
             max_position_fraction: 0.10,
             prediction_log: self_assessment::PredictionLog::new(),
+            news_cache: news_composer::ExtractionCache::load("data/news_extractions.json"),
         }
+    }
+
+    /// Enrich a MarketState's news items with Claude-extracted
+    /// compositional tokens. For each NewsItem with empty
+    /// `extraction_tokens`, calls Claude (via cache) to produce
+    /// `(actor, action, object, magnitude)` and stores the resulting
+    /// `act_/vrb_/obj_/mag_` tokens.
+    ///
+    /// Call OFFLINE / before analyze(). Once cache is warm, just a
+    /// HashMap lookup — no Claude calls in the trading-decision loop.
+    /// Idempotent: NewsItems already enriched are skipped.
+    pub fn enrich_news(&mut self, state: &mut MarketState) {
+        for n in state.news.iter_mut() {
+            if !n.extraction_tokens.is_empty() { continue; }
+            let extraction = news_composer::extract_or_call(
+                &mut self.news_cache, &n.headline);
+            n.extraction_tokens = extraction.to_tokens();
+        }
+    }
+
+    /// Save the news extraction cache to its configured path.
+    pub fn save_news_cache(&self) -> std::io::Result<()> {
+        self.news_cache.save()
     }
 
     /// Construct a safe, no-trade analysis when the brain refuses to
@@ -777,6 +816,18 @@ impl TradingBrain {
             // Kept non-zero so a same-headline pair gets a small boost,
             // but doesn't dominate similarity computation.
             if tok.starts_with("w_") { return 0.5; }
+            // Compositional news tokens (Claude-extracted). Higher weight
+            // than bag-of-words because they ARE the semantic structure:
+            //   act_<actor> — entity (FED, SEC, etc.)
+            //   vrb_<action> — verb (RAISE, CUT, BAN) — most discriminating:
+            //                  separates hawkish from dovish events sharing
+            //                  actor + object
+            //   obj_<object> — target (RATES, ETF, MINING)
+            //   mag_<magnitude> — qualitative scale
+            if tok.starts_with("act_") { return 2.0; }
+            if tok.starts_with("vrb_") { return 2.5; }
+            if tok.starts_with("obj_") { return 2.0; }
+            if tok.starts_with("mag_") { return 1.5; }
             // Time context — lowest weight (intraday seasonality is real
             // but weak compared to price action and news).
             if tok.starts_with("hour+") || tok.starts_with("dow+") { return 1.0; }
@@ -929,8 +980,18 @@ impl TradingBrain {
             tokens.push(format!("src_{}", src_tag));
             tokens.push(bucket_signed("sent", n.sentiment));
             tokens.push(bucket("age", n.age_hours.max(0.01)));
-            for word in headline_tokens(&n.headline, 5) {
-                tokens.push(format!("w_{}", word));
+            // Compositional Claude-extracted tokens (act_/vrb_/obj_/mag_)
+            // give the brain semantic structure: "Fed cuts rates" and
+            // "Fed raises rates" share actor+object but differ on action.
+            // Falls back to bag-of-words when extraction not available.
+            if !n.extraction_tokens.is_empty() {
+                for tok in &n.extraction_tokens {
+                    tokens.push(tok.clone());
+                }
+            } else {
+                for word in headline_tokens(&n.headline, 5) {
+                    tokens.push(format!("w_{}", word));
+                }
             }
         }
 
@@ -1868,6 +1929,7 @@ mod tests {
             headline: "Fed raises rates by fifty basis points".to_string(),
             sentiment: -0.6,
             age_hours: 1.0,
+            extraction_tokens: Vec::new(),
         });
 
         let e_base = tb.encode_state(&base);
@@ -1892,6 +1954,7 @@ mod tests {
             headline: "FOMC raises rates aggressive hawkish".to_string(),
             sentiment: -0.7,
             age_hours: 0.5,
+            extraction_tokens: Vec::new(),
         });
         state.timestamp = Some(TimeContext { hour_utc: 18, day_of_week: 2 });
 
@@ -1936,6 +1999,7 @@ mod tests {
                     source: "FED".into(),
                     headline: "Fed dovish remarks".into(),
                     sentiment: 0.4, age_hours: 1.0,
+                    extraction_tokens: Vec::new(),
                 }],
                 timestamp: Some(TimeContext { hour_utc: 14, day_of_week: 2 }),
             }, Outcome::new(Direction::Up, 0.02)),
@@ -1947,6 +2011,7 @@ mod tests {
                     source: "REUTERS".into(),
                     headline: "Exchange hack panic".into(),
                     sentiment: -0.7, age_hours: 0.5,
+                    extraction_tokens: Vec::new(),
                 }],
                 timestamp: Some(TimeContext { hour_utc: 9, day_of_week: 4 }),
             }, Outcome::new(Direction::Down, 0.05)),
@@ -2002,6 +2067,7 @@ mod tests {
                 source: "FED".into(),
                 headline: "Fed dovish pivot rate cut signals".into(),
                 sentiment: 0.6, age_hours: 1.0,
+                extraction_tokens: Vec::new(),
             }],
             timestamp: Some(TimeContext { hour_utc: 18, day_of_week: 2 }),
         };

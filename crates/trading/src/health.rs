@@ -198,6 +198,7 @@ mod boundary_tests {
             news: vec![NewsItem {
                 source: "FED".into(), headline: "ok".into(),
                 sentiment: 0.3, age_hours: 1.0,
+                extraction_tokens: Vec::new(),
             }],
             timestamp: Some(TimeContext { hour_utc: 12, day_of_week: 2 }),
         }
