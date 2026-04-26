@@ -938,8 +938,21 @@ impl TradingBrain {
             Direction::Down => outcome_distribution.p_up,
             Direction::Flat => outcome_distribution.p_up.max(outcome_distribution.p_down),
         };
-        let confidence = (blended_confidence - opposing_p * 0.3).clamp(0.0, 1.0);
+        let raw_confidence = (blended_confidence - opposing_p * 0.3).clamp(0.0, 1.0);
         steps.push(format!("opposing_p:{:.2}", opposing_p));
+
+        // Confidence recalibration via observed track record. If the
+        // calibration bucket for this raw confidence has enough scored
+        // observations, override with the observed hit rate. The brain
+        // genuinely self-improves: "I said 0.7 confidence and was right
+        // 50% of the time, so future 0.7 outputs report as 0.5". No
+        // fixed-formula approach gives this property.
+        // Min samples = 10 — below that, the bucket's hit rate is too
+        // noisy to override raw confidence.
+        let confidence = self.prediction_log.recalibrate(raw_confidence, 10);
+        if (confidence - raw_confidence).abs() > 0.01 {
+            steps.push(format!("recal:{:.2}->{:.2}", raw_confidence, confidence));
+        }
 
         // Per-horizon predictions: aggregate horizon-specific outcomes
         // from the matched past patterns. Each horizon gets its own

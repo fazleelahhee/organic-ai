@@ -175,6 +175,29 @@ impl PredictionLog {
         false
     }
 
+    /// Recalibrate a raw confidence value based on observed track
+    /// record. If past predictions at this confidence level were right
+    /// X% of the time and X != raw, return the observed rate as the
+    /// calibrated confidence. Requires the bucket to have at least
+    /// `min_samples` scored observations to be trusted; otherwise
+    /// returns the raw value unchanged.
+    ///
+    /// This is Platt-scaling-lite: the brain's reported confidence
+    /// becomes empirically grounded over time. After enough outcomes
+    /// accumulate, "0.7 confidence" actually means "right 70% of the
+    /// time" — a property no fixed-formula approach can give.
+    pub fn recalibrate(&self, raw_confidence: f32, min_samples: u64) -> f32 {
+        let assessed = self.assess();
+        let bucket_idx = (raw_confidence * 10.0).floor() as usize;
+        let bucket_idx = bucket_idx.min(9);
+        let bucket = &assessed.calibration[bucket_idx];
+        if bucket.n >= min_samples {
+            bucket.hit_rate
+        } else {
+            raw_confidence
+        }
+    }
+
     /// Compute the full SelfAssessment over the log.
     pub fn assess(&self) -> SelfAssessment {
         let scored: Vec<&PredictionRecord> = self.records.iter()
@@ -348,6 +371,32 @@ mod tests {
         assert!((bucket8.hit_rate - 0.8).abs() < 0.01);
         // Bucket midpoint is 0.85, hit rate 0.8 → error 0.05.
         assert!((bucket8.calibration_error - 0.05).abs() < 0.01);
+    }
+
+    /// Recalibration must actually adjust confidence based on observed
+    /// track record. After 10+ scored predictions at confidence 0.85
+    /// where only 50% were hits, future calls to recalibrate(0.85, 10)
+    /// must return ~0.5 — the observed rate, not the raw value.
+    #[test]
+    fn test_recalibrate_uses_observed_hit_rate() {
+        let mut log = PredictionLog::new();
+        // 10 predictions at conf 0.85, 5 hits, 5 misses → bucket 8
+        // should report hit_rate 0.5.
+        for i in 0..10 {
+            let r = rec(0, &format!("k{}", i), "regime_normal", Direction::Up, 0.85);
+            log.record(r.clone());
+            log.score_by_key(&r.state_key,
+                if i < 5 { Direction::Up } else { Direction::Down });
+        }
+
+        let recal = log.recalibrate(0.85, 10);
+        assert!((recal - 0.5).abs() < 0.05,
+            "Recalibrated 0.85 should reflect observed 50% hit rate, got {}", recal);
+
+        // Below min_samples threshold: returns raw.
+        let recal_strict = log.recalibrate(0.85, 100);
+        assert!((recal_strict - 0.85).abs() < 0.01,
+            "Below min_samples, recalibrate should return raw input");
     }
 
     #[test]
