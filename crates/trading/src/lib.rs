@@ -45,6 +45,7 @@ pub mod baseline;
 pub mod self_assessment;
 pub mod health;
 pub mod news_composer;
+pub mod position;
 
 /// A discrete news event the brain should consider alongside numeric
 /// market state. The user's core ask: feed the brain Fed announcements,
