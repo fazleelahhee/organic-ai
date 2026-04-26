@@ -111,11 +111,42 @@ pub struct MarketState {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Direction { Up, Down, Flat }
 
+/// One horizon-specific outcome — direction + magnitude over a specific
+/// time window after the state. A single market state can yield very
+/// different reactions at different horizons (e.g. SVB news caused a
+/// 1-hour dip then a 7-day rally on haven-trade narrative).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HorizonOutcome {
+    /// Time window in hours (1, 4, 24, 168 = 1 week, etc.).
+    pub horizon_hours: u32,
+    pub direction: Direction,
+    /// Magnitude of move as a fraction (0.025 = 2.5%).
+    pub magnitude: f64,
+}
+
+/// Realized outcome after a state. The primary direction/magnitude is
+/// the canonical 24-hour reaction (or whatever horizon you treat as
+/// primary). `additional_horizons` carries other-timeframe outcomes
+/// when available — empty list is fine, and the system degrades to
+/// single-horizon behavior in that case.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Outcome {
     pub direction: Direction,
     /// Magnitude of move as a percentage (e.g. 0.025 = 2.5% up if Up).
     pub magnitude: f64,
+    /// Optional additional horizon predictions. Empty = single-horizon
+    /// data only (existing seed dataset behavior).
+    #[serde(default)]
+    pub additional_horizons: Vec<HorizonOutcome>,
+}
+
+impl Outcome {
+    /// Construct a single-horizon outcome (no additional horizons).
+    /// Convenience for callers who only have 24h data — backward
+    /// compatible with the pre-multi-horizon API.
+    pub fn new(direction: Direction, magnitude: f64) -> Self {
+        Self { direction, magnitude, additional_horizons: Vec::new() }
+    }
 }
 
 /// A historical (state, outcome) match retrieved as part of an analysis.
@@ -147,6 +178,41 @@ pub struct OutcomeDistribution {
     pub sample_size: u32,
 }
 
+/// Per-horizon forecast. Same state can produce different predictions at
+/// different time horizons — e.g. "Down 1h, Up 7d" is a common news-
+/// shock pattern (initial flush then recovery).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HorizonPrediction {
+    pub horizon_hours: u32,
+    pub direction: Direction,
+    /// Confidence specific to this horizon (calibrated over horizon-
+    /// specific outcomes from retrieved patterns).
+    pub confidence: f32,
+    /// Mean magnitude of the move across matched past patterns at this
+    /// horizon. Useful for position-sizing and stop-loss placement.
+    pub mean_magnitude: f32,
+}
+
+/// Recommended position sizing derived from confidence, anomaly, and
+/// expected magnitude. NOT financial advice — a starting point for the
+/// trader's risk-management layer to consume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionSizing {
+    /// Suggested size as fraction of capital, in [-max_position,
+    /// +max_position]. Positive = long, negative = short, 0 = no trade.
+    /// Computed as edge × confidence × (1 - anomaly × 0.5) capped at
+    /// max_position. Conservative quarter-Kelly style — actual position
+    /// should typically be smaller still after risk-management gates.
+    pub fraction: f32,
+    /// Edge: (p_top - p_opposing) — the empirical advantage from the
+    /// outcome distribution. 0 = no advantage; 1 = unanimous past data.
+    pub edge: f32,
+    /// Why this sizing — e.g. "low_confidence:0.3", "high_anomaly:0.85",
+    /// "strong_edge:0.7". Lets the trader's risk layer make informed
+    /// overrides ("ignore brain when anomaly > 0.9").
+    pub rationale: Vec<String>,
+}
+
 /// Structured output of a reasoning pass. Designed to plug into a fuller
 /// trading system — not a final decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +240,13 @@ pub struct Analysis {
     /// but here are 3 similar past patterns that went DOWN — judge for
     /// yourself." Real reasoning surfaces opposing evidence.
     pub counter_evidence: Vec<PatternMatch>,
+    /// Per-horizon forecasts derived from retrieved patterns'
+    /// `additional_horizons`. Empty when no per-horizon data was
+    /// trained — falls back to single-horizon behavior cleanly.
+    pub horizon_predictions: Vec<HorizonPrediction>,
+    /// Suggested position sizing. Computed from edge × confidence ×
+    /// (1 - anomaly/2). Caps at the reasoner's `max_position_fraction`.
+    pub position_sizing: PositionSizing,
     /// Audit trail of reasoning steps the brain took for this analysis.
     /// Each step is a structured tag like "hdc_recall:hit" or
     /// "anomaly:high". Easy to log and review later.
@@ -302,6 +375,11 @@ pub struct TradingBrain {
     /// half as much as the most recent one. Set lower (e.g. 200) for
     /// fast-moving markets, higher (5000+) for stable strategies.
     pub recency_half_life: f32,
+    /// Maximum suggested position size as fraction of capital. The
+    /// position-sizing output is hard-capped at this value. Default
+    /// 0.25 = quarter-Kelly-style — conservative. Aggressive strategies
+    /// might raise to 0.5; defensive ones lower to 0.10.
+    pub max_position_fraction: f32,
 }
 
 impl Default for TradingBrain {
@@ -329,6 +407,7 @@ impl TradingBrain {
             history: std::collections::VecDeque::new(),
             history_capacity: 5000,
             recency_half_life: 1000.0,
+            max_position_fraction: 0.25,
         }
     }
 
@@ -840,6 +919,22 @@ impl TradingBrain {
         let confidence = (blended_confidence - opposing_p * 0.3).clamp(0.0, 1.0);
         steps.push(format!("opposing_p:{:.2}", opposing_p));
 
+        // Per-horizon predictions: aggregate horizon-specific outcomes
+        // from the matched past patterns. Each horizon gets its own
+        // direction argmax + confidence + mean magnitude. If patterns
+        // weren't trained with multi-horizon data, this is empty —
+        // backward compatible with single-horizon training.
+        let horizon_predictions = Self::compute_horizon_predictions(&similar_patterns);
+        if !horizon_predictions.is_empty() {
+            steps.push(format!("horizons:n={}", horizon_predictions.len()));
+        }
+
+        // Position sizing: edge × confidence × (1 - anomaly/2), clamped
+        // to ±max_position_fraction. Sign depends on direction.
+        let position_sizing = self.compute_position_sizing(
+            reasoned_direction, confidence, anomaly,
+            &outcome_distribution, &mut steps);
+
         Analysis {
             direction: reasoned_direction,
             confidence,
@@ -847,8 +942,93 @@ impl TradingBrain {
             similar_patterns,
             outcome_distribution,
             counter_evidence,
+            horizon_predictions,
+            position_sizing,
             reasoning_steps: steps,
         }
+    }
+
+    /// Aggregate per-horizon outcomes across matched past patterns.
+    /// For each horizon present in the data, compute the direction
+    /// argmax weighted by similarity, confidence as the win-probability,
+    /// and mean magnitude across matches at that horizon.
+    fn compute_horizon_predictions(matches: &[PatternMatch]) -> Vec<HorizonPrediction> {
+        use std::collections::HashMap;
+        let mut by_horizon: HashMap<u32, Vec<(f32, &HorizonOutcome)>> = HashMap::new();
+        for m in matches {
+            for h in &m.outcome.additional_horizons {
+                by_horizon.entry(h.horizon_hours).or_default()
+                    .push((m.similarity, h));
+            }
+        }
+        let mut out: Vec<HorizonPrediction> = Vec::new();
+        for (horizon, items) in by_horizon {
+            let total_w: f32 = items.iter().map(|(s, _)| s.max(1e-6)).sum();
+            if total_w <= 0.0 { continue; }
+            let mut up = 0.0f32; let mut down = 0.0f32; let mut flat = 0.0f32;
+            let mut mag_sum = 0.0f32;
+            for (sim, h) in &items {
+                let w = sim.max(1e-6);
+                match h.direction {
+                    Direction::Up => up += w,
+                    Direction::Down => down += w,
+                    Direction::Flat => flat += w,
+                }
+                mag_sum += w * h.magnitude as f32;
+            }
+            let max = up.max(down).max(flat);
+            let direction = if (up - max).abs() < 1e-6 { Direction::Up }
+                            else if (down - max).abs() < 1e-6 { Direction::Down }
+                            else { Direction::Flat };
+            let confidence = (max / total_w).clamp(0.0, 1.0);
+            let mean_magnitude = mag_sum / total_w;
+            out.push(HorizonPrediction {
+                horizon_hours: horizon, direction, confidence, mean_magnitude,
+            });
+        }
+        out.sort_by_key(|p| p.horizon_hours);
+        out
+    }
+
+    /// Compute suggested position sizing from direction + confidence +
+    /// anomaly + outcome distribution. Returns a value in [-max, +max]
+    /// that the caller's risk-management layer can scale further.
+    fn compute_position_sizing(
+        &self,
+        direction: Direction,
+        confidence: f32,
+        anomaly: f32,
+        dist: &OutcomeDistribution,
+        steps: &mut Vec<String>,
+    ) -> PositionSizing {
+        let mut rationale: Vec<String> = Vec::new();
+        let edge = match direction {
+            Direction::Up => dist.p_up - dist.p_down,
+            Direction::Down => dist.p_down - dist.p_up,
+            Direction::Flat => 0.0,
+        }.max(0.0).clamp(0.0, 1.0);
+        rationale.push(format!("edge={:.2}", edge));
+
+        // Anomaly halves the maximum size — unfamiliar territory means
+        // lower sizing even when distribution disagrees. This mirrors
+        // common discretionary trading practice ("sit on hands when
+        // markets do something I haven't seen before").
+        let anomaly_factor = (1.0 - anomaly * 0.5).clamp(0.0, 1.0);
+        rationale.push(format!("anomaly_factor={:.2}", anomaly_factor));
+
+        let raw = edge * confidence * anomaly_factor;
+        let capped = raw.min(self.max_position_fraction);
+        rationale.push(format!("raw={:.3}", raw));
+        rationale.push(format!("capped={:.3}", capped));
+
+        let signed = match direction {
+            Direction::Up => capped,
+            Direction::Down => -capped,
+            Direction::Flat => 0.0,
+        };
+        steps.push(format!("position:{:+.3}", signed));
+
+        PositionSizing { fraction: signed, edge, rationale }
     }
 
     /// Combined anomaly score in [0, 1]. Two components:
@@ -945,8 +1125,8 @@ mod tests {
     #[test]
     fn test_outcome_encoding_distinguishes_directions() {
         let tb = TradingBrain::new_small(2048);
-        let up = Outcome { direction: Direction::Up, magnitude: 0.02 };
-        let down = Outcome { direction: Direction::Down, magnitude: 0.02 };
+        let up = Outcome::new(Direction::Up, 0.02);
+        let down = Outcome::new(Direction::Down, 0.02);
         assert_ne!(tb.encode_outcome(&up), tb.encode_outcome(&down));
     }
 
@@ -967,7 +1147,7 @@ mod tests {
     fn test_trained_pattern_recalls() {
         let mut tb = TradingBrain::new_small(2048);
         let state = sample_state(100.0);
-        let outcome = Outcome { direction: Direction::Up, magnitude: 0.02 };
+        let outcome = Outcome::new(Direction::Up, 0.02);
 
         // Train the same pair many times so HDC stores it firmly and
         // the spiking pathway gets reinforced.
@@ -1011,8 +1191,8 @@ mod tests {
             news: Vec::new(),
             timestamp: None,
         };
-        let bull_outcome = Outcome { direction: Direction::Up, magnitude: 0.03 };
-        let bear_outcome = Outcome { direction: Direction::Down, magnitude: 0.03 };
+        let bull_outcome = Outcome::new(Direction::Up, 0.03);
+        let bear_outcome = Outcome::new(Direction::Down, 0.03);
 
         for _ in 0..30 {
             tb.train_on_outcome(&bull_state, &bull_outcome);
@@ -1063,7 +1243,7 @@ mod tests {
     fn test_analysis_surfaces_similar_past_patterns() {
         let mut tb = TradingBrain::new_small(2048);
         let state = sample_state(100.0);
-        let outcome = Outcome { direction: Direction::Up, magnitude: 0.02 };
+        let outcome = Outcome::new(Direction::Up, 0.02);
 
         // Build up trade journal history.
         for _ in 0..10 { tb.train_on_outcome(&state, &outcome); }
@@ -1091,12 +1271,10 @@ mod tests {
 
         // Train mostly Up, some Down — the distribution should reflect this.
         for _ in 0..8 {
-            tb.train_on_outcome(&state, &Outcome {
-                direction: Direction::Up, magnitude: 0.02 });
+            tb.train_on_outcome(&state, &Outcome::new(Direction::Up, 0.02));
         }
         for _ in 0..2 {
-            tb.train_on_outcome(&state, &Outcome {
-                direction: Direction::Down, magnitude: 0.02 });
+            tb.train_on_outcome(&state, &Outcome::new(Direction::Down, 0.02));
         }
 
         let analysis = tb.analyze(&state);
@@ -1118,12 +1296,10 @@ mod tests {
 
         // 7 Up, 3 Down. Headline will be Up, counter-evidence has 3 Downs.
         for _ in 0..7 {
-            tb.train_on_outcome(&state, &Outcome {
-                direction: Direction::Up, magnitude: 0.02 });
+            tb.train_on_outcome(&state, &Outcome::new(Direction::Up, 0.02));
         }
         for _ in 0..3 {
-            tb.train_on_outcome(&state, &Outcome {
-                direction: Direction::Down, magnitude: 0.03 });
+            tb.train_on_outcome(&state, &Outcome::new(Direction::Down, 0.03));
         }
 
         let analysis = tb.analyze(&state);
@@ -1182,7 +1358,7 @@ mod tests {
         state.timestamp = Some(TimeContext { hour_utc: 18, day_of_week: 2 });
 
         // Train: when this kind of news arrives, BTC drops.
-        let outcome = Outcome { direction: Direction::Down, magnitude: 0.05 };
+        let outcome = Outcome::new(Direction::Down, 0.05);
         for _ in 0..30 { tb.train_on_outcome(&state, &outcome); }
 
         let analysis = tb.analyze(&state);
@@ -1198,7 +1374,7 @@ mod tests {
     fn test_history_persistence_roundtrip() {
         let mut tb = TradingBrain::new_small(2048);
         let state = sample_state(100.0);
-        let outcome = Outcome { direction: Direction::Up, magnitude: 0.02 };
+        let outcome = Outcome::new(Direction::Up, 0.02);
         for _ in 0..5 { tb.train_on_outcome(&state, &outcome); }
         let len_before = tb.history_len();
         assert_eq!(len_before, 5);
@@ -1249,17 +1425,14 @@ mod tests {
 
         // Unanimous: 10 Up training samples.
         for _ in 0..10 {
-            tb.train_on_outcome(&unanimous, &Outcome {
-                direction: Direction::Up, magnitude: 0.02 });
+            tb.train_on_outcome(&unanimous, &Outcome::new(Direction::Up, 0.02));
         }
         // Split: 6 Up, 4 Down.
         for _ in 0..6 {
-            tb.train_on_outcome(&split, &Outcome {
-                direction: Direction::Up, magnitude: 0.02 });
+            tb.train_on_outcome(&split, &Outcome::new(Direction::Up, 0.02));
         }
         for _ in 0..4 {
-            tb.train_on_outcome(&split, &Outcome {
-                direction: Direction::Down, magnitude: 0.02 });
+            tb.train_on_outcome(&split, &Outcome::new(Direction::Down, 0.02));
         }
 
         let unanimous_a = tb.analyze(&unanimous);

@@ -71,7 +71,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(15, 3),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.40 },
+            outcome: Outcome::new(Direction::Down, 0.40),
         },
         HistoricalEvent {
             label: "Fed slashes rates to zero",
@@ -86,7 +86,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(22, 6),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.12 },
+            outcome: Outcome::new(Direction::Up, 0.12),
         },
         HistoricalEvent {
             label: "Bitcoin halving",
@@ -100,7 +100,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(19, 0),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.03 },
+            outcome: Outcome::new(Direction::Up, 0.03),
         },
         HistoricalEvent {
             label: "MicroStrategy first BTC buy",
@@ -114,7 +114,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(13, 1),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.05 },
+            outcome: Outcome::new(Direction::Up, 0.05),
         },
         // ============= 2021: First half — Tesla, ATH, Musk pivot =============
         HistoricalEvent {
@@ -130,7 +130,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(14, 0),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.18 },
+            outcome: Outcome::new(Direction::Up, 0.18),
         },
         HistoricalEvent {
             label: "Coinbase direct listing",
@@ -144,7 +144,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(13, 2),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.04 },
+            outcome: Outcome::new(Direction::Down, 0.04),
         },
         HistoricalEvent {
             label: "Musk suspends Tesla BTC payments",
@@ -158,7 +158,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(22, 2),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.15 },
+            outcome: Outcome::new(Direction::Down, 0.15),
         },
         HistoricalEvent {
             label: "China mining ban Inner Mongolia escalation",
@@ -173,7 +173,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(8, 4),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.20 },
+            outcome: Outcome::new(Direction::Down, 0.20),
         },
         HistoricalEvent {
             label: "El Salvador adopts BTC legal tender",
@@ -187,7 +187,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(16, 2),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.08 },
+            outcome: Outcome::new(Direction::Up, 0.08),
         },
         // ============= 2021: Second half — recovery, ATH =============
         HistoricalEvent {
@@ -202,7 +202,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(20, 6),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.04 },
+            outcome: Outcome::new(Direction::Up, 0.04),
         },
         HistoricalEvent {
             label: "China bans all crypto transactions",
@@ -216,7 +216,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(10, 4),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.07 },
+            outcome: Outcome::new(Direction::Down, 0.07),
         },
         HistoricalEvent {
             label: "First BTC futures ETF approval",
@@ -230,7 +230,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(15, 4),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.08 },
+            outcome: Outcome::new(Direction::Up, 0.08),
         },
         HistoricalEvent {
             label: "BTC all-time high $69k",
@@ -244,7 +244,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(14, 2),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.06 },
+            outcome: Outcome::new(Direction::Down, 0.06),
         },
         // ============= 2022: Bear market =============
         HistoricalEvent {
@@ -260,7 +260,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(7, 3),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.10 },
+            outcome: Outcome::new(Direction::Up, 0.10),
         },
         HistoricalEvent {
             label: "Fed first rate hike of cycle",
@@ -275,7 +275,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(18, 2),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.05 },
+            outcome: Outcome::new(Direction::Down, 0.05),
         },
         HistoricalEvent {
             label: "LUNA / Terra collapse",
@@ -290,7 +290,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(14, 0),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.20 },
+            outcome: Outcome::new(Direction::Down, 0.20),
         },
         HistoricalEvent {
             label: "Fed 75 bps hike — biggest since 1994",
@@ -305,7 +305,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(18, 2),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.04 },
+            outcome: Outcome::new(Direction::Up, 0.04),
         },
         HistoricalEvent {
             label: "Ethereum merge to PoS",
@@ -319,7 +319,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(7, 3),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.03 },
+            outcome: Outcome::new(Direction::Down, 0.03),
         },
         HistoricalEvent {
             label: "FTX collapse",
@@ -334,7 +334,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(14, 1),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.18 },
+            outcome: Outcome::new(Direction::Down, 0.18),
         },
         // ============= 2023: Recovery, banking crisis, BlackRock ETF =============
         HistoricalEvent {
@@ -350,7 +350,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(15, 4),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.20 },
+            outcome: Outcome::new(Direction::Up, 0.20),
         },
         HistoricalEvent {
             label: "BlackRock files for spot BTC ETF",
@@ -364,7 +364,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(15, 3),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.20 },
+            outcome: Outcome::new(Direction::Up, 0.20),
         },
         HistoricalEvent {
             label: "Israel-Hamas conflict begins",
@@ -378,7 +378,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(8, 5),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.04 },
+            outcome: Outcome::new(Direction::Up, 0.04),
         },
         HistoricalEvent {
             label: "ETF approval rumor (false report)",
@@ -392,7 +392,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(15, 0),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.03 },
+            outcome: Outcome::new(Direction::Down, 0.03),
         },
         // ============= 2024: ETF approval, halving, ATH =============
         HistoricalEvent {
@@ -408,7 +408,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(22, 2),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.15 },
+            outcome: Outcome::new(Direction::Down, 0.15),
         },
         HistoricalEvent {
             label: "ETF flows ATH approach",
@@ -422,7 +422,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(15, 2),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.10 },
+            outcome: Outcome::new(Direction::Down, 0.10),
         },
         HistoricalEvent {
             label: "Bitcoin halving 2024",
@@ -436,7 +436,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(0, 5),
             },
-            outcome: Outcome { direction: Direction::Flat, magnitude: 0.01 },
+            outcome: Outcome::new(Direction::Flat, 0.01),
         },
         HistoricalEvent {
             label: "Mt Gox repayment fears",
@@ -451,7 +451,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(10, 4),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.05 },
+            outcome: Outcome::new(Direction::Down, 0.05),
         },
         HistoricalEvent {
             label: "Fed rate cut (first since 2020)",
@@ -465,7 +465,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(18, 2),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.05 },
+            outcome: Outcome::new(Direction::Up, 0.05),
         },
         HistoricalEvent {
             label: "Trump election win",
@@ -480,7 +480,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(8, 2),
             },
-            outcome: Outcome { direction: Direction::Up, magnitude: 0.10 },
+            outcome: Outcome::new(Direction::Up, 0.10),
         },
         HistoricalEvent {
             label: "BTC crosses $100k",
@@ -494,7 +494,7 @@ pub fn historical_btc_events() -> Vec<HistoricalEvent> {
                 ],
                 timestamp: ts(3, 3),
             },
-            outcome: Outcome { direction: Direction::Down, magnitude: 0.04 },
+            outcome: Outcome::new(Direction::Down, 0.04),
         },
     ]
 }
